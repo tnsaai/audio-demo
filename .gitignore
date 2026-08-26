@@ -1,0 +1,19 @@
+# dependencies
+node_modules
+
+# build output
+.next
+out
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets — never commit. Real values live only in .env.local.
+.env
+.env.local
+.env.*.local
+
+# editor / os
+.DS_Store
+Thumbs.db
+.idea
+.vscode
