@@ -1,4 +1,5 @@
-import { ENGINE_KEYS, type ConditionId, type EngineKey } from "@/lib/engines";
+import { ENGINE_KEYS, type BenchmarkId, type ConditionId, type EngineKey } from "@/lib/engines";
+import { fetchDiarAudio, listDiarRows } from "@/lib/diarbench";
 import { listSamples, loadSampleAudio } from "@/lib/samples";
 import { runEngine, TnsaError } from "@/lib/tnsa";
 import { score } from "@/lib/wer";
@@ -71,6 +72,9 @@ export async function POST(request: Request) {
     languages?: string[];
     limit?: number;
     embeddings?: boolean;
+    benchmark?: BenchmarkId;
+    /** DiarBench config name, e.g. "Telugu". */
+    diarLanguage?: string;
   };
 
   const conditions: ConditionId[] = body.conditions?.length
@@ -79,6 +83,10 @@ export async function POST(request: Request) {
   const languages = body.languages?.length ? new Set(body.languages) : null;
   const limit = Math.max(1, Math.min(body.limit ?? 10, 99));
   const withEmbeddings = body.embeddings !== false;
+
+  if ((body.benchmark ?? "aren") === "diarbench") {
+    return runDiarBench(body.diarLanguage ?? "Telugu", Math.max(1, Math.min(body.limit ?? 2, 100)));
+  }
 
   const all = await listSamples();
   const chosen = all
@@ -168,6 +176,105 @@ export async function POST(request: Request) {
             }
           });
         }
+      }
+
+      send({ type: "done", elapsedMs: Date.now() - started });
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+/**
+ * Indic DiarBench pass.
+ *
+ * No acoustic conditions here — the set ships one recording per row — so the
+ * loop is flat. Clips are long (~200 s), so each one is a substantial unit of
+ * work and results stream as they land.
+ */
+async function runDiarBench(language: string, limit: number): Promise<Response> {
+  const encoder = new TextEncoder();
+  const started = Date.now();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: BenchmarkEvent) =>
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}
+`));
+
+      const { rows } = await listDiarRows(language, limit);
+      send({ type: "start", total: rows.length * ENGINE_KEYS.length });
+
+      for (const row of rows) {
+        const bytes = await fetchDiarAudio(row.audioUrl);
+        if (!bytes) {
+          for (const engine of ENGINE_KEYS) {
+            send({
+              type: "error",
+              sample: row.recordingId,
+              condition: "clean",
+              engine,
+              message: "audio fetch failed (the signed URL may have expired)",
+            });
+          }
+          continue;
+        }
+        const audio = new Blob([bytes], { type: "audio/wav" });
+
+        const settled = await Promise.allSettled(
+          ENGINE_KEYS.map((engine) =>
+            runEngine(audio, `${row.recordingId}.wav`, {
+              engine,
+              // V2 cannot be forced to most Indic codes; runEngine downgrades
+              // it to auto. The Indic engine still targets the real language
+              // for its script-repair pass.
+              language: row.languageCode,
+              targetLanguage: row.languageCode,
+              includeEmbedding: false,
+            })
+          )
+        );
+
+        settled.forEach((outcome, index) => {
+          const engine = ENGINE_KEYS[index];
+          if (outcome.status === "rejected") {
+            const reason = outcome.reason;
+            send({
+              type: "error",
+              sample: row.recordingId,
+              condition: "clean",
+              engine,
+              message: reason instanceof TnsaError ? reason.message : String(reason),
+            });
+            return;
+          }
+          const payload = outcome.value;
+          const text = payload.transcript?.text ?? "";
+          const scored = score(row.reference, text, row.languageCode);
+          send({
+            type: "row",
+            sample: row.recordingId,
+            language: row.languageCode,
+            source: row.datasetType,
+            condition: "clean",
+            engine,
+            wer: scored.wer,
+            insertions: scored.insertions,
+            deletions: scored.deletions,
+            substitutions: scored.substitutions,
+            referenceWords: scored.referenceWords,
+            hallucinated: scored.hallucinated,
+            empty: scored.empty,
+            latencyMs: payload.latency.total_ms,
+            text,
+          });
+        });
       }
 
       send({ type: "done", elapsedMs: Date.now() - started });

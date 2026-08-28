@@ -1,6 +1,7 @@
 import "server-only";
 
-import { ENGINES, type EngineKey } from "./engines";
+import { ENGINES, V2_LANGUAGES, type EngineKey } from "./engines";
+import { LANGUAGE_NAMES } from "./lang";
 
 /**
  * Server-side client for the TNSA Audio API on the GH200 box.
@@ -13,6 +14,7 @@ const BASE = (process.env.TNSA_API_BASE_URL ?? "https://embedding.tnsaai.com").r
 const KEY = process.env.TNSA_API_KEY ?? "";
 
 const OUTPUTS_MODEL = "tnsa-ngen-outputs-v1";
+const AGEN_MODEL = "agen-multilingual-v1";
 
 export class TnsaError extends Error {
   constructor(
@@ -70,6 +72,8 @@ export type OutputsResponse = {
     windows?: number;
     prompt_versions?: { language_tagging?: string; transcript_correction?: string };
   };
+  /** Set when the Indic correction pass failed but the acoustic result stands. */
+  correctionError?: string;
 };
 
 export type TranscriptSegment = {
@@ -129,7 +133,12 @@ export async function runEngine(
   form.set("audio", audio, filename);
   form.set("model", OUTPUTS_MODEL);
   form.set("stt_model", ENGINES[opts.engine].id);
-  form.set("language", opts.language ?? "auto");
+  // V2 hard-500s on Indic codes it does not cover, so an unsupported request
+  // becomes auto detection rather than a crashed run.
+  const requested = opts.language ?? "auto";
+  const language =
+    opts.engine === "v2" && !V2_LANGUAGES.has(requested) ? "auto" : requested;
+  form.set("language", language);
   form.set("include", include.join(","));
   if (opts.targetLanguage) form.set("target_language", opts.targetLanguage);
   if (opts.chunkSeconds) form.set("chunk_seconds", String(opts.chunkSeconds));
@@ -180,7 +189,123 @@ export async function runEngine(
     );
   }
 
-  return { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
+  if (!ENGINES[opts.engine].correction) {
+    return { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
+  }
+
+  // Indic engine: run the Qwen script-repair pass over the acoustic output.
+  const transcript = payload.transcript;
+  const target = opts.targetLanguage || opts.language || transcript?.language;
+  if (!transcript?.segments?.length || !target || target === "auto") {
+    return { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
+  }
+
+  const correctionStarted = Date.now();
+  let corrected: Map<number, string>;
+  try {
+    corrected = await correctSegments(
+      transcript.segments.map((segment) => ({
+        id: segment.id,
+        text: segment.text,
+        sourceLanguage: segment.primary ?? segment.stt_language ?? null,
+      })),
+      target,
+      LANGUAGE_NAMES[target] ?? target,
+      opts.signal
+    );
+  } catch (cause) {
+    // A correction failure must not lose a good acoustic transcript. Return the
+    // uncorrected result rather than failing the whole run.
+    return {
+      ...payload,
+      latency: { ...payload.latency, wall_ms: Date.now() - started },
+      correctionError: (cause as Error).message,
+    };
+  }
+
+  const segments = transcript.segments.map((segment) => {
+    const text = corrected.get(segment.id);
+    if (!text || text === segment.text) return segment;
+    return { ...segment, raw_text: segment.text, text, corrected: true };
+  });
+  const changed = segments.filter((segment) => segment.corrected).length;
+
+  return {
+    ...payload,
+    transcript: {
+      ...transcript,
+      raw_text: transcript.text,
+      text: segments.map((segment) => segment.text).join(" ").trim(),
+      segments,
+      corrected_segment_count: changed,
+    },
+    latency: {
+      ...payload.latency,
+      correction_ms: Date.now() - correctionStarted,
+      wall_ms: Date.now() - started,
+    },
+  };
+}
+
+/**
+ * AGen (Qwen) transcript correction.
+ *
+ * The acoustic pass can emit Indic speech phonetically in the wrong script —
+ * Telugu written in Devanagari reads as fluent nonsense and no script check
+ * catches it, because the language tag is wrong too. This pass rewrites each
+ * segment into the target language's native script.
+ *
+ * It is slow: roughly 15–20 s per call on the clips tested. That cost is the
+ * whole reason it is a separate engine rather than always-on.
+ */
+export async function correctSegments(
+  segments: Array<{ id: number; text: string; sourceLanguage?: string | null }>,
+  targetLanguage: string,
+  targetLanguageName: string,
+  signal?: AbortSignal
+): Promise<Map<number, string>> {
+  const usable = segments.filter((segment) => segment.text.trim());
+  if (!usable.length) return new Map();
+
+  const body = {
+    model: AGEN_MODEL,
+    task: "transcript_correction",
+    segments: usable.map((segment, index) => ({
+      id: segment.id,
+      source_language_code: segment.sourceLanguage || "unknown",
+      target_language_code: targetLanguage,
+      target_language: targetLanguageName,
+      script_mismatch: true,
+      transcript: segment.text,
+      previous_context: usable[index - 1]?.text.slice(-500) ?? "",
+      next_context: usable[index + 1]?.text.slice(0, 500) ?? "",
+    })),
+    options: { temperature: 0, reasoning: false },
+  };
+
+  const response = await fetch(`${BASE}/agen`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new TnsaError("agen_error", `AGen HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+  }
+
+  const parsed = (await response.json()) as {
+    error?: { code: string; message: string };
+    segments?: Array<{ id: number; corrected_text?: string; changed?: boolean }>;
+  };
+  if (parsed.error) throw new TnsaError(parsed.error.code, parsed.error.message);
+
+  const out = new Map<number, string>();
+  for (const segment of parsed.segments ?? []) {
+    const text = segment.corrected_text?.trim();
+    if (text) out.set(segment.id, text);
+  }
+  return out;
 }
 
 export async function health(): Promise<Record<string, unknown>> {

@@ -1,11 +1,12 @@
 "use client";
 
 import { diff, type DiffOp } from "@/lib/wer";
+import type { EngineKey } from "@/lib/engines";
 import { isRtl } from "@/lib/lang";
 import { cn } from "@/lib/cn";
 import { Badge, Card, CardBody, CardHead } from "./ui";
 
-type Hypothesis = { engine: { short: string; name: string; key: "v2" | "v1" }; text: string };
+type Hypothesis = { engine: { short: string; name: string; key: EngineKey }; text: string };
 
 /**
  * Word-level alignment against the reference.
@@ -39,7 +40,7 @@ export function DiffView({
           return (
             <div key={hypothesis.engine.key}>
               <div className="mb-2 flex items-center gap-2">
-                <Badge tone={hypothesis.engine.key}>{hypothesis.engine.short}</Badge>
+                <Badge tone={hypothesis.engine.key === "v2" ? "v2" : "v1"}>{hypothesis.engine.short}</Badge>
                 <span className="text-[12px] text-[var(--color-muted)]">{hypothesis.engine.name}</span>
               </div>
               <p

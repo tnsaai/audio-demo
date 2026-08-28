@@ -96,7 +96,7 @@ export default function Playground() {
           <div className="space-y-1.5">
             <Label>Model</Label>
             <div className="flex rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-1">
-              {(["v2", "v1", "both"] as ModelChoice[]).map((choice) => (
+              {(["v2", "indic", "both"] as ModelChoice[]).map((choice) => (
                 <button
                   key={choice}
                   type="button"

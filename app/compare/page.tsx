@@ -61,7 +61,7 @@ export default function Compare() {
 
   const runOf = (key: EngineKey) => response?.runs.find((item) => item.engine === key) ?? null;
   const v2 = runOf("v2");
-  const v1 = runOf("v1");
+  const v1 = runOf("indic");
 
   const reference = response?.reference ?? null;
   const referenceLanguage = response?.referenceLanguage ?? null;
@@ -156,7 +156,7 @@ export default function Compare() {
               </div>
               <p className="text-[12px] leading-relaxed text-[var(--color-body)]">
                 {ENGINES.v2.short} detected{" "}
-                <strong>{languageName(v2Language)}</strong>, {ENGINES.v1.short} detected{" "}
+                <strong>{languageName(v2Language)}</strong>, {ENGINES.indic.short} detected{" "}
                 <strong>{languageName(v1Language)}</strong>. One of them is transliterating rather
                 than transcribing — writing the speech phonetically into the wrong script, which
                 reads as fluent text but means nothing. Force the spoken language above and re-run
@@ -193,7 +193,7 @@ export default function Compare() {
           busy={busy}
         />
         <EnginePanel
-          engineKey="v1"
+          engineKey="indic"
           run={v1}
           reference={reference}
           referenceLanguage={referenceLanguage}
@@ -209,7 +209,7 @@ export default function Compare() {
           language={referenceLanguage}
           hypotheses={[
             { engine: ENGINES.v2, text: v2.result.transcript?.text ?? "" },
-            { engine: ENGINES.v1, text: v1.result.transcript?.text ?? "" },
+            { engine: ENGINES.indic, text: v1.result.transcript?.text ?? "" },
           ]}
         />
       ) : null}

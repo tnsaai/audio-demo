@@ -4,7 +4,16 @@ import { useMemo, useRef, useState } from "react";
 import { Loader2, Play, Square } from "lucide-react";
 
 import { Badge, Button, Card, CardBody, CardHead, Label, Select, Stat } from "@/components/ui";
-import { CONDITIONS, ENGINES, PUBLISHED_RESULTS, type ConditionId, type EngineKey } from "@/lib/engines";
+import {
+  BENCHMARKS,
+  CONDITIONS,
+  DIARBENCH_LANGUAGES,
+  ENGINES,
+  PUBLISHED_RESULTS,
+  type BenchmarkId,
+  type ConditionId,
+  type EngineKey,
+} from "@/lib/engines";
 import { languageName } from "@/lib/lang";
 import { formatPercent } from "@/lib/wer";
 import { cn, ms } from "@/lib/cn";
@@ -40,7 +49,11 @@ export default function Benchmark() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [limit, setLimit] = useState(8);
+  // DiarBench recordings are ~200 s each, so the default has to be far smaller.
+  const [diarLimit, setDiarLimit] = useState(2);
   const [language, setLanguage] = useState("ar");
+  const [benchmark, setBenchmark] = useState<BenchmarkId>("aren");
+  const [diarLanguage, setDiarLanguage] = useState("Telugu");
   const abort = useRef<AbortController | null>(null);
 
   const start = async () => {
@@ -57,10 +70,12 @@ export default function Benchmark() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          limit,
+          benchmark,
+          limit: benchmark === "diarbench" ? diarLimit : limit,
+          diarLanguage,
           languages: language === "all" ? [] : [language],
           conditions: ["clean", "tel8k", "tel8k_noisy"],
-          embeddings: true,
+          embeddings: benchmark === "aren",
         }),
         signal: controller.signal,
       });
@@ -154,7 +169,7 @@ export default function Benchmark() {
                 <th className="pb-2 font-medium">Language</th>
                 <th className="pb-2 font-medium">Condition</th>
                 <th className="pb-2 text-right font-medium">{ENGINES.v2.short} WER</th>
-                <th className="pb-2 text-right font-medium">{ENGINES.v1.short} WER</th>
+                <th className="pb-2 text-right font-medium">{ENGINES.indic.short} WER</th>
                 <th className="pb-2 text-right font-medium">Delta</th>
               </tr>
             </thead>
@@ -167,10 +182,10 @@ export default function Benchmark() {
                     {row.v2.toFixed(1)}%
                   </td>
                   <td className="py-2 text-right font-mono tabular-nums text-[var(--color-v1)]">
-                    {row.v1.toFixed(1)}%
+                    {row.indic.toFixed(1)}%
                   </td>
                   <td className="py-2 text-right font-mono tabular-nums text-[var(--color-muted)]">
-                    −{(row.v1 - row.v2).toFixed(1)}
+                    −{(row.indic - row.v2).toFixed(1)}
                   </td>
                 </tr>
               ))}
@@ -187,27 +202,80 @@ export default function Benchmark() {
       <Card>
         <CardHead className="flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">
-            <Label>Language</Label>
-            <Select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={busy}>
-              <option value="ar">Arabic</option>
-              <option value="en">English</option>
-              <option value="all">Both</option>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Clips</Label>
-            <Select
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              disabled={busy}
-            >
-              {[4, 8, 16, 32, 99].map((value) => (
-                <option key={value} value={value}>
-                  {value} × 3 conditions × 2 engines
-                </option>
+            <Label>Benchmark</Label>
+            <div className="flex rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-1">
+              {(Object.keys(BENCHMARKS) as BenchmarkId[]).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setBenchmark(id)}
+                  className={cn(
+                    "rounded-lg px-3 py-1.5 text-[13px] transition-colors disabled:opacity-40",
+                    benchmark === id
+                      ? "bg-[var(--color-surface)] font-medium text-white"
+                      : "text-[var(--color-muted)] hover:text-white"
+                  )}
+                >
+                  {BENCHMARKS[id].name}
+                </button>
               ))}
-            </Select>
+            </div>
           </div>
+
+          {benchmark === "aren" ? (
+            <>
+              <div className="space-y-1.5">
+                <Label>Language</Label>
+                <Select value={language} onChange={(e) => setLanguage(e.target.value)} disabled={busy}>
+                  <option value="ar">Arabic</option>
+                  <option value="en">English</option>
+                  <option value="all">Both</option>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Clips</Label>
+                <Select value={limit} onChange={(e) => setLimit(Number(e.target.value))} disabled={busy}>
+                  {[4, 8, 16, 32, 99].map((value) => (
+                    <option key={value} value={value}>
+                      {value} × 3 conditions × 2 engines
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-1.5">
+                <Label>Language</Label>
+                <Select
+                  value={diarLanguage}
+                  onChange={(e) => setDiarLanguage(e.target.value)}
+                  disabled={busy}
+                >
+                  {DIARBENCH_LANGUAGES.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Recordings</Label>
+                <Select
+                  value={diarLimit}
+                  onChange={(e) => setDiarLimit(Number(e.target.value))}
+                  disabled={busy}
+                >
+                  {[1, 2, 5, 10, 25, 100].map((value) => (
+                    <option key={value} value={value}>
+                      {value} × 2 engines{value >= 10 ? "  (slow)" : ""}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </>
+          )}
           <Button
             variant={busy ? "default" : "primary"}
             onClick={busy ? stop : start}
@@ -219,6 +287,30 @@ export default function Benchmark() {
         </CardHead>
 
         <CardBody className="space-y-5">
+          <p className="text-[12px] leading-relaxed text-[var(--color-muted)]">
+            <a
+              href={BENCHMARKS[benchmark].url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--color-body)] underline underline-offset-2"
+            >
+              {BENCHMARKS[benchmark].repo}
+            </a>{" "}
+            · {BENCHMARKS[benchmark].languages} — {BENCHMARKS[benchmark].detail}
+          </p>
+
+          {benchmark === "diarbench" ? (
+            <div className="rounded-xl border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/10 px-4 py-3 text-[12px] leading-relaxed text-[var(--color-body)]">
+              <strong className="text-[var(--color-warn)]">Read these numbers carefully.</strong>{" "}
+              The reference is speaker-attributed and concatenated in time order, so WER here also
+              charges both engines for speaker overlap and turn boundaries — neither engine
+              attempts diarization. Scores run far higher than on ARen and are not comparable to it.
+              Use this to compare the two engines against <em>each other</em> on Indic audio, not as
+              an absolute accuracy figure. Recordings average ~200 s, so a large run is slow and
+              will exceed a serverless function timeout.
+            </div>
+          ) : null}
+
           {progress.total ? (
             <div>
               <div className="flex items-center justify-between text-[12px] text-[var(--color-muted)]">
@@ -237,23 +329,23 @@ export default function Benchmark() {
             </div>
           ) : null}
 
-          {rows.length ? (
+          {rows.length && benchmark === "aren" ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-[13px]">
                 <thead>
                   <tr className="text-left text-[11px] uppercase tracking-[0.09em] text-[var(--color-muted)]">
                     <th className="pb-2 font-medium">Condition</th>
                     <th className="pb-2 text-right font-medium">{ENGINES.v2.short} WER</th>
-                    <th className="pb-2 text-right font-medium">{ENGINES.v1.short} WER</th>
+                    <th className="pb-2 text-right font-medium">{ENGINES.indic.short} WER</th>
                     <th className="pb-2 text-right font-medium">Delta</th>
                     <th className="pb-2 text-right font-medium">{ENGINES.v2.short} latency</th>
-                    <th className="pb-2 text-right font-medium">{ENGINES.v1.short} latency</th>
+                    <th className="pb-2 text-right font-medium">{ENGINES.indic.short} latency</th>
                   </tr>
                 </thead>
                 <tbody>
                   {CONDITIONS.map((condition) => {
                     const a = cell(condition.id, "v2");
-                    const b = cell(condition.id, "v1");
+                    const b = cell(condition.id, "indic");
                     if (!a && !b) return null;
                     return (
                       <tr key={condition.id} className="border-t border-[var(--color-line)]">
@@ -292,8 +384,8 @@ export default function Benchmark() {
               {(() => {
                 const clean = cell("clean", "v2");
                 const noisy = cell("tel8k_noisy", "v2");
-                const cleanV1 = cell("clean", "v1");
-                const noisyV1 = cell("tel8k_noisy", "v1");
+                const cleanV1 = cell("clean", "indic");
+                const noisyV1 = cell("tel8k_noisy", "indic");
                 if (!clean || !noisy || !cleanV1 || !noisyV1) return null;
                 return (
                   <div className="mt-5 grid grid-cols-2 gap-5 sm:grid-cols-4">
@@ -304,7 +396,7 @@ export default function Benchmark() {
                       tone="v2"
                     />
                     <Stat
-                      label={`${ENGINES.v1.short} degradation`}
+                      label={`${ENGINES.indic.short} degradation`}
                       value={`+${((noisyV1.wer - cleanV1.wer) * 100).toFixed(1)}`}
                       hint="WER points, clean → noisy"
                       tone="v1"
@@ -399,7 +491,7 @@ export default function Benchmark() {
                   <tr key={index} className="border-b border-[var(--color-line)] last:border-0">
                     <td className="py-1.5 pr-3 font-mono text-[var(--color-muted)]">{row.sample}</td>
                     <td className="py-1.5 pr-3">
-                      <Badge tone={row.engine}>{ENGINES[row.engine].short}</Badge>
+                      <Badge tone={row.engine === "v2" ? "v2" : "v1"}>{ENGINES[row.engine].short}</Badge>
                     </td>
                     <td className="py-1.5 pr-3 text-[var(--color-muted)]">
                       {CONDITIONS.find((c) => c.id === row.condition)?.label}

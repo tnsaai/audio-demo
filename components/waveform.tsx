@@ -1,19 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Mic, Pause, Play, Square, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Mic, Pause, Play, Square } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button } from "./ui";
 
+/** RMS below this is treated as no acoustic signal at all. */
+const SILENCE_FLOOR = 0.008;
+const BAR_WIDTH = 3;
+const BAR_GAP = 2;
+
 /**
  * Recording UI with a live waveform.
  *
- * The waveform is not decoration — while recording you otherwise have no way to
- * tell whether the mic is actually picking anything up, and a silent take only
- * reveals itself after a round trip to the box. Level history is sampled per
- * animation frame and drawn as a scrolling bar field, so clipping and dead air
- * are both visible as they happen.
+ * The waveform is not decoration — while recording you otherwise cannot tell
+ * whether the mic is picking anything up, and a silent take only reveals itself
+ * after a round trip to the box.
+ *
+ * The render loop is started from an effect, not from the click handler: the
+ * canvas only exists once `recording` is true, so anything reading
+ * `canvasRef.current` synchronously after `setRecording(true)` sees null and
+ * never schedules a frame.
  */
 export function WaveformRecorder({
   onDone,
@@ -24,81 +32,121 @@ export function WaveformRecorder({
 }) {
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
-  const [peak, setPeak] = useState(0);
+  const [silent, setSilent] = useState(false);
 
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const recorder = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
-  const levels = useRef<number[]>([]);
-  const audioContext = useRef<AudioContext | null>(null);
-  const raf = useRef<number | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const contextRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const levelsRef = useRef<number[]>([]);
+  // Highest level across the whole take. A natural pause between words must not
+  // read as a dead microphone, so the warning keys off this rather than the
+  // instantaneous level.
+  const loudestRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => cleanup, []);
+  const teardown = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    sourceRef.current?.disconnect();
+    sourceRef.current = null;
+    analyserRef.current = null;
+    const context = contextRef.current;
+    contextRef.current = null;
+    if (context && context.state !== "closed") void context.close().catch(() => {});
+  }, []);
 
-  function cleanup() {
-    if (raf.current) cancelAnimationFrame(raf.current);
-    if (timer.current) clearInterval(timer.current);
-    recorder.current?.stream.getTracks().forEach((track) => track.stop());
-    void audioContext.current?.close().catch(() => {});
-    audioContext.current = null;
-  }
+  useEffect(() => teardown, [teardown]);
 
-  const draw = (analyser: AnalyserNode) => {
-    const element = canvas.current;
-    if (!element) return;
-    const context = element.getContext("2d");
-    if (!context) return;
+  /** Sample the analyser and repaint. Runs only while `recording` is true. */
+  useEffect(() => {
+    if (!recording) return;
+    let frame = 0;
+    let cancelled = false;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = element.clientWidth;
-    const height = element.clientHeight;
-    if (element.width !== width * dpr || element.height !== height * dpr) {
-      element.width = width * dpr;
-      element.height = height * dpr;
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const tick = () => {
+      if (cancelled) return;
+      const analyser = analyserRef.current;
+      const element = canvasRef.current;
+
+      if (analyser && element) {
+        const width = element.clientWidth;
+        const height = element.clientHeight;
+        if (width > 0 && height > 0) {
+          const dpr = window.devicePixelRatio || 1;
+          const targetWidth = Math.round(width * dpr);
+          const targetHeight = Math.round(height * dpr);
+          if (element.width !== targetWidth || element.height !== targetHeight) {
+            element.width = targetWidth;
+            element.height = targetHeight;
+          }
+          const context = element.getContext("2d");
+          if (context) {
+            context.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const buffer = new Uint8Array(analyser.fftSize);
+            analyser.getByteTimeDomainData(buffer);
+            let sum = 0;
+            for (const value of buffer) {
+              const centred = (value - 128) / 128;
+              sum += centred * centred;
+            }
+            const rms = Math.sqrt(sum / buffer.length);
+            if (rms > loudestRef.current) loudestRef.current = rms;
+
+            const capacity = Math.max(1, Math.floor(width / (BAR_WIDTH + BAR_GAP)));
+            levelsRef.current.push(rms);
+            while (levelsRef.current.length > capacity) levelsRef.current.shift();
+
+            context.clearRect(0, 0, width, height);
+            context.fillStyle = "rgba(139,147,167,0.25)";
+            context.fillRect(0, height / 2 - 0.5, width, 1);
+
+            levelsRef.current.forEach((level, index) => {
+              const scaled = Math.min(1, level * 3.2);
+              const barHeight = Math.max(2, scaled * (height - 6));
+              const x = index * (BAR_WIDTH + BAR_GAP);
+              const y = (height - barHeight) / 2;
+              context.fillStyle = scaled > 0.9 ? "#f87171" : "#4ade80";
+              context.globalAlpha = 0.5 + scaled * 0.5;
+              context.beginPath();
+              context.roundRect(x, y, BAR_WIDTH, barHeight, 1.5);
+              context.fill();
+            });
+            context.globalAlpha = 1;
+          }
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [recording]);
+
+  /**
+   * Silence check, polled rather than driven from the render loop — setting
+   * React state at 60 fps would re-render the whole panel on every frame.
+   */
+  useEffect(() => {
+    if (!recording) {
+      setSilent(false);
+      return;
     }
-
-    const buffer = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(buffer);
-
-    // RMS of the frame, normalised around the 128 midpoint of the byte domain.
-    let sum = 0;
-    for (const value of buffer) {
-      const centred = (value - 128) / 128;
-      sum += centred * centred;
-    }
-    const rms = Math.sqrt(sum / buffer.length);
-
-    const barWidth = 3;
-    const gap = 2;
-    const capacity = Math.floor(width / (barWidth + gap));
-    levels.current.push(rms);
-    if (levels.current.length > capacity) levels.current.shift();
-
-    setPeak((current) => Math.max(current * 0.92, rms));
-
-    context.clearRect(0, 0, width, height);
-
-    // Centre line, so silence reads as a line rather than an empty box.
-    context.fillStyle = "rgba(139,147,167,0.25)";
-    context.fillRect(0, height / 2 - 0.5, width, 1);
-
-    levels.current.forEach((level, index) => {
-      const scaled = Math.min(1, level * 2.6);
-      const barHeight = Math.max(2, scaled * (height - 8));
-      const x = index * (barWidth + gap);
-      const y = (height - barHeight) / 2;
-      context.fillStyle = scaled > 0.85 ? "#f87171" : "#4ade80";
-      context.globalAlpha = 0.55 + scaled * 0.45;
-      context.beginPath();
-      context.roundRect(x, y, barWidth, barHeight, 1.5);
-      context.fill();
-    });
-    context.globalAlpha = 1;
-
-    raf.current = requestAnimationFrame(() => draw(analyser));
-  };
+    const started = Date.now();
+    const poll = setInterval(() => {
+      // Give the mic a moment to spin up before accusing it of being dead.
+      if (Date.now() - started < 1500) return;
+      setSilent(loudestRef.current < SILENCE_FLOOR);
+    }, 400);
+    return () => clearInterval(poll);
+  }, [recording]);
 
   const start = async () => {
     let stream: MediaStream;
@@ -111,42 +159,47 @@ export function WaveformRecorder({
       return;
     }
 
-    chunks.current = [];
-    levels.current = [];
+    chunksRef.current = [];
+    levelsRef.current = [];
+    loudestRef.current = 0;
 
     const context = new AudioContext();
-    audioContext.current = context;
+    // Chrome hands back a suspended context when it is created outside a user
+    // gesture; without this the analyser reports a flat 128 forever.
+    if (context.state === "suspended") await context.resume().catch(() => {});
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
-    context.createMediaStreamSource(stream).connect(analyser);
+    analyser.smoothingTimeConstant = 0.6;
+    const source = context.createMediaStreamSource(stream);
+    source.connect(analyser);
+
+    contextRef.current = context;
+    analyserRef.current = analyser;
+    sourceRef.current = source;
 
     const media = new MediaRecorder(stream);
     media.ondataavailable = (event) => {
-      if (event.data.size) chunks.current.push(event.data);
+      if (event.data.size) chunksRef.current.push(event.data);
     };
     media.onstop = () => {
       stream.getTracks().forEach((track) => track.stop());
-      const blob = new Blob(chunks.current, { type: media.mimeType || "audio/webm" });
+      const blob = new Blob(chunksRef.current, { type: media.mimeType || "audio/webm" });
       onDone(blob, `recording-${Date.now()}.webm`, URL.createObjectURL(blob));
     };
     media.start();
+    recorderRef.current = media;
 
-    recorder.current = media;
-    setRecording(true);
     setSeconds(0);
-    timer.current = setInterval(() => setSeconds((value) => value + 1), 1000);
-    draw(analyser);
+    setSilent(false);
+    setRecording(true);
+    timerRef.current = setInterval(() => setSeconds((value) => value + 1), 1000);
   };
 
   const stop = () => {
-    recorder.current?.stop();
-    recorder.current = null;
+    recorderRef.current?.stop();
+    recorderRef.current = null;
     setRecording(false);
-    setPeak(0);
-    if (raf.current) cancelAnimationFrame(raf.current);
-    if (timer.current) clearInterval(timer.current);
-    void audioContext.current?.close().catch(() => {});
-    audioContext.current = null;
+    teardown();
   };
 
   return (
@@ -163,13 +216,18 @@ export function WaveformRecorder({
       {recording ? (
         <div className="flex flex-1 items-center gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] px-3 py-1.5">
           <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-bad)]" />
-          <canvas ref={canvas} className="h-9 min-w-0 flex-1" />
+          <canvas ref={canvasRef} className="h-9 min-w-0 flex-1" />
           <span className="shrink-0 font-mono text-[12px] tabular-nums text-[var(--color-body)]">
             {String(Math.floor(seconds / 60)).padStart(2, "0")}:
             {String(seconds % 60).padStart(2, "0")}
           </span>
-          {peak < 0.01 && seconds > 1 ? (
-            <span className="shrink-0 text-[11px] text-[var(--color-warn)]">no signal</span>
+          {silent ? (
+            <span
+              className="shrink-0 text-[11px] text-[var(--color-warn)]"
+              title="No audio has reached the recorder since it started — check the input device."
+            >
+              no signal
+            </span>
           ) : null}
         </div>
       ) : null}
@@ -181,13 +239,7 @@ export function WaveformRecorder({
  * Static waveform for a captured or uploaded clip, with a playhead.
  * Decoding happens once; peaks are downsampled to the bar count.
  */
-export function WaveformPlayer({
-  url,
-  className,
-}: {
-  url: string;
-  className?: string;
-}) {
+export function WaveformPlayer({ url, className }: { url: string; className?: string }) {
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);

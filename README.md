@@ -8,8 +8,21 @@ nothing is mocked or pre-recorded.
 
 | | Model id | Notes |
 |---|---|---|
-| **NGenSTT-V2-Large** | `ngenstt-v2-large` | Base: NGen-4-Lite-ASR. Current generation. |
-| **OAW-DistillGen-AudioSTT** (V1) | `tnsa-ngen-stt-v1` | Whisper-derived. Faster, degrades sharply on real recordings. |
+| **NGenSTT-V2-Large** | `ngenstt-v2-large` | Base: NGen-4-Lite-ASR. Strongest on Arabic and English. |
+| **NGenSTT-V2 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus a Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
+
+### V2 cannot be forced to most Indic languages
+
+Measured against the live box, `ngenstt-v2-large` accepts only
+`auto`, `ar`, `en`, `hi`, `fa` as a forced `language`. Every other Indic code —
+`te`, `ta`, `kn`, `ml`, `bn`, `mr`, `gu`, `pa`, `ur` — returns a bare **HTTP 500**,
+not an error payload. `runEngine` downgrades an unsupported code to `auto` rather
+than letting the request crash.
+
+This also explains a failure that looks like mis-detection: V2 labels Telugu
+speech as Hindi and writes it phonetically in Devanagari. It is not guessing
+wrong — Hindi is the nearest Indic language its head actually covers. That is
+the gap the Indic engine's correction pass exists to close.
 
 **V2 is not reachable through `/stt`.** That endpoint validates model names against
 its own registry and returns `unknown_model` for `ngenstt-v2-large`. V2 is only
@@ -22,8 +35,14 @@ available through the unified endpoints, passed as `stt_model`:
 This demo uses `/outputs`, which runs decode, STT windowing, language tagging,
 script correction and the 1024-dim embedding server-side in a single call.
 `lib/tnsa.ts` reads `models.stt` back off every response and throws if the server
-ran a different engine than the one requested — a V2 column silently showing V1
-output would invalidate the whole comparison.
+ran a different engine than the one requested — a V2 column silently showing the
+other engine's output would invalidate the whole comparison.
+
+The Indic engine adds a second call to `POST /agen`
+(`task: transcript_correction`). It costs roughly 8–18 s, which is why it is a
+separate engine rather than always-on. If that call fails the acoustic transcript
+is returned unchanged with `correctionError` set, so a correction outage never
+loses a good result.
 
 ## Pages
 
@@ -31,7 +50,7 @@ output would invalidate the whole comparison.
 |---|---|
 | `/` | **Playground.** Pick a clip, pick a model (V2 / V1 / both), read the transcript and the 1024-dim embedding it produced side by side. Switching models re-runs the same audio immediately. |
 | `/compare` | **Comparison.** Both engines at once, scored against the reference, word-level diff, and a cross-engine language-disagreement check. |
-| `/benchmark` | Published ARen results, a live streaming WER re-run across all three conditions, **and** embedding robustness — how far the vector moves as the channel degrades. |
+| `/benchmark` | Two selectable suites — **ARen** (Arabic/English, 3 acoustic conditions, plus embedding robustness) and **Indic DiarBench** (22 Indic languages). |
 | `/embeddings` | 1024-dim vectors with a cosine-similarity matrix across clips. |
 
 Recording shows a live waveform with a level meter and a *no signal* warning, so a
@@ -136,6 +155,36 @@ sample bank.
 on Hobby, up to 300 s on Pro. A single comparison takes a few seconds and is fine
 anywhere; a large benchmark sweep is not. Run big sweeps locally, or keep the clip
 count low.
+
+## Benchmarks
+
+**ARen** — `TNSA/Aren`. 99 clips × 3 conditions, 2–40 s, single speaker. This is
+the suite the published numbers come from and the only one whose WER is directly
+comparable to them.
+
+**Indic DiarBench** — `sarvamai/indic-diarbench`, 22 Indic languages. Read through
+the HF datasets-server rows API, since each language config is a single ~1 GB
+parquet with embedded audio that cannot be fetched per request.
+
+Three things to know before quoting a DiarBench number:
+
+- **Recordings are ~200 s with 6–8 speakers.** Measured WER is 93–98% for both
+  engines, and it is dominated by *deletions* — roughly two thirds of the
+  reference goes untranscribed. Neither engine attempts diarization, and the
+  concatenated speaker-attributed reference charges them for overlap and turn
+  boundaries. Treat it as a relative comparison between the two engines on Indic
+  audio, never as an absolute accuracy figure, and never against ARen.
+- **It is slow.** About 2 minutes per recording for both engines. 100 recordings
+  is over three hours and will not complete inside any serverless function
+  timeout. Run large sweeps locally.
+- **Row counts vary by language** and are often under 100 — Telugu has 88.
+
+Where it is genuinely useful is the script story. On one Telugu recording:
+
+| Engine | WER | Output |
+|---|---|---|
+| V2 | 97.8% | `ये तो एक डिबेटेबल क्वेश्चन है।` — Devanagari |
+| V2 Indic | 93.1% | `అప్పుడే ఇది…` — Telugu script |
 
 ## Scoring
 
