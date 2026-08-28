@@ -10,10 +10,24 @@ export const ENGINES = {
     key: "v2" as const,
     name: "NGenSTT-V2-Large",
     short: "V2",
-    base: "NGen-4-Lite-ASR",
+    base: "QwenASR-1.7B",
     /** No post-pass; the acoustic model's output is taken as final. */
     correction: false,
-    blurb: "Current generation. Holds together under telephony bandwidth and noise.",
+    blurb: "QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi.",
+  },
+  v2agen: {
+    id: "ngenstt-v2-large",
+    key: "v2agen" as const,
+    name: "NGenSTT-V2 + AGen",
+    short: "V2+AGen",
+    base: "QwenASR-1.7B + AGen (Qwen) script repair",
+    /**
+     * Same acoustic model as V2, with the correction pass bolted on. V2 has no
+     * head for most Indic languages and emits them phonetically in Devanagari;
+     * this asks AGen to rewrite that into the target script afterwards.
+     */
+    correction: true,
+    blurb: "V2's acoustic pass with the Qwen correction stage applied on top.",
   },
   indic: {
     id: "tnsa-ngen-stt-v1",
@@ -43,10 +57,10 @@ export const ENGINES = {
 export const V2_LANGUAGES = new Set(["auto", "ar", "en", "hi", "fa"]);
 
 export type EngineKey = keyof typeof ENGINES;
-export const ENGINE_KEYS: EngineKey[] = ["v2", "indic"];
+export const ENGINE_KEYS: EngineKey[] = ["v2", "v2agen", "indic"];
 
 export function isEngineKey(value: string): value is EngineKey {
-  return value === "v2" || value === "indic";
+  return value === "v2" || value === "v2agen" || value === "indic";
 }
 
 /**

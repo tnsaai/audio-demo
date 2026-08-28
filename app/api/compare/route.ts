@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { ENGINE_KEYS, isEngineKey, type ConditionId, type EngineKey } from "@/lib/engines";
 import { listSamples, loadSampleAudio } from "@/lib/samples";
-import { runEngine, TnsaError, type OutputsResponse } from "@/lib/tnsa";
+import { runEngines, TnsaError, type OutputsResponse } from "@/lib/tnsa";
 
 export const runtime = "nodejs";
 // Vercel caps this by plan: 60 s on Hobby, up to 300 s on Pro.
@@ -73,16 +73,12 @@ export async function POST(request: Request) {
     if (typeof supplied === "string" && supplied.trim()) reference = supplied.trim();
   }
 
-  const settled = await Promise.allSettled(
-    engines.map((engine) =>
-      runEngine(audio, filename, { engine, language, targetLanguage })
-    )
-  );
+  const results = await runEngines(audio, filename, engines, { language, targetLanguage });
 
-  const runs: EngineRun[] = settled.map((outcome, index) => {
-    const engine = engines[index];
-    if (outcome.status === "fulfilled") return { engine, ok: true, result: outcome.value };
-    const reason = outcome.reason;
+  const runs: EngineRun[] = engines.map((engine) => {
+    const outcome = results.get(engine);
+    if (outcome?.ok) return { engine, ok: true, result: outcome.result };
+    const reason = outcome?.ok === false ? outcome.error : "no result";
     if (reason instanceof TnsaError) {
       return { engine, ok: false, code: reason.code, message: reason.message };
     }

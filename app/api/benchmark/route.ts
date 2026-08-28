@@ -1,7 +1,7 @@
 import { ENGINE_KEYS, type BenchmarkId, type ConditionId, type EngineKey } from "@/lib/engines";
 import { fetchDiarAudio, listDiarRows } from "@/lib/diarbench";
 import { listSamples, loadSampleAudio } from "@/lib/samples";
-import { runEngine, TnsaError } from "@/lib/tnsa";
+import { runEngines, TnsaError } from "@/lib/tnsa";
 import { score } from "@/lib/wer";
 
 export const runtime = "nodejs";
@@ -115,20 +115,15 @@ export async function POST(request: Request) {
 
           // The embedding model is shared across STT engines, so only one run
           // per condition needs to carry it back.
-          const settled = await Promise.allSettled(
-            ENGINE_KEYS.map((engine, index) =>
-              runEngine(audio, loaded.name, {
-                engine,
-                language: sample.language ?? "auto",
-                includeEmbedding: withEmbeddings && index === 0,
-              })
-            )
-          );
+          const results = await runEngines(audio, loaded.name, ENGINE_KEYS, {
+            language: sample.language ?? "auto",
+            includeEmbedding: withEmbeddings,
+          });
 
-          settled.forEach((outcome, index) => {
-            const engine = ENGINE_KEYS[index];
-            if (outcome.status === "rejected") {
-              const reason = outcome.reason;
+          ENGINE_KEYS.forEach((engine) => {
+            const outcome = results.get(engine);
+            if (!outcome || !outcome.ok) {
+              const reason = outcome?.ok === false ? outcome.error : "no result";
               send({
                 type: "error",
                 sample: sample.id,
@@ -139,7 +134,7 @@ export async function POST(request: Request) {
               return;
             }
 
-            const payload = outcome.value;
+            const payload = outcome.result;
             const text = payload.transcript?.text ?? "";
             const scored = score(sample.reference!, text, sample.language ?? undefined);
             send({
@@ -227,24 +222,18 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
         }
         const audio = new Blob([bytes], { type: "audio/wav" });
 
-        const settled = await Promise.allSettled(
-          ENGINE_KEYS.map((engine) =>
-            runEngine(audio, `${row.recordingId}.wav`, {
-              engine,
-              // V2 cannot be forced to most Indic codes; runEngine downgrades
-              // it to auto. The Indic engine still targets the real language
-              // for its script-repair pass.
-              language: row.languageCode,
-              targetLanguage: row.languageCode,
-              includeEmbedding: false,
-            })
-          )
-        );
+        // V2 cannot be forced to most Indic codes; runEngine downgrades it to
+        // auto. The correction engines still target the real language.
+        const results = await runEngines(audio, `${row.recordingId}.wav`, ENGINE_KEYS, {
+          language: row.languageCode,
+          targetLanguage: row.languageCode,
+          includeEmbedding: false,
+        });
 
-        settled.forEach((outcome, index) => {
-          const engine = ENGINE_KEYS[index];
-          if (outcome.status === "rejected") {
-            const reason = outcome.reason;
+        ENGINE_KEYS.forEach((engine) => {
+          const outcome = results.get(engine);
+          if (!outcome || !outcome.ok) {
+            const reason = outcome?.ok === false ? outcome.error : "no result";
             send({
               type: "error",
               sample: row.recordingId,
@@ -254,7 +243,7 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
             });
             return;
           }
-          const payload = outcome.value;
+          const payload = outcome.result;
           const text = payload.transcript?.text ?? "";
           const scored = score(row.reference, text, row.languageCode);
           send({

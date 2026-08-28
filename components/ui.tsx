@@ -37,12 +37,13 @@ export function Badge({
   className,
   ...props
 }: React.HTMLAttributes<HTMLSpanElement> & {
-  tone?: "neutral" | "v2" | "v1" | "warn" | "bad" | "good";
+  tone?: "neutral" | "v2" | "v1" | "v3" | "warn" | "bad" | "good";
 }) {
   const tones: Record<string, string> = {
     neutral: "border-[var(--color-line)] text-[var(--color-muted)]",
     v2: "border-[var(--color-v2)]/40 text-[var(--color-v2)] bg-[var(--color-v2)]/10",
     v1: "border-[var(--color-v1)]/40 text-[var(--color-v1)] bg-[var(--color-v1)]/10",
+    v3: "border-[var(--color-v3)]/40 text-[var(--color-v3)] bg-[var(--color-v3)]/10",
     good: "border-[var(--color-v2)]/40 text-[var(--color-v2)] bg-[var(--color-v2)]/10",
     warn: "border-[var(--color-warn)]/40 text-[var(--color-warn)] bg-[var(--color-warn)]/10",
     bad: "border-[var(--color-bad)]/40 text-[var(--color-bad)] bg-[var(--color-bad)]/10",
@@ -104,11 +105,12 @@ export function Stat({
   label: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
-  tone?: "v2" | "v1" | "bad" | "warn";
+  tone?: "v2" | "v1" | "v3" | "bad" | "warn";
 }) {
   const colors: Record<string, string> = {
     v2: "text-[var(--color-v2)]",
     v1: "text-[var(--color-v1)]",
+    v3: "text-[var(--color-v3)]",
     bad: "text-[var(--color-bad)]",
     warn: "text-[var(--color-warn)]",
   };

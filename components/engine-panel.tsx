@@ -84,7 +84,8 @@ export function EnginePanel({
   busy?: boolean;
 }) {
   const engine = ENGINES[engineKey];
-  const tone: "v2" | "v1" = engineKey === "indic" ? "v1" : "v2";
+  const tone: "v2" | "v1" | "v3" =
+    engineKey === "indic" ? "v1" : engineKey === "v2agen" ? "v3" : "v2";
 
   return (
     <Card className="flex h-full flex-col">
@@ -146,7 +147,7 @@ function Body({
   peerScore?: Score | null;
   showEmbedding?: boolean;
   disagreesWith?: string | null;
-  tone: "v2" | "v1";
+  tone: "v2" | "v1" | "v3";
 }) {
   const transcript = result.transcript;
   const text = transcript?.text ?? "";
@@ -226,7 +227,7 @@ function Body({
               </span>
             }
             hint={ties ? "tie" : wins ? "better" : peerScore ? "worse" : undefined}
-            tone={wins ? "v2" : scored.wer > 0.5 ? "bad" : undefined}
+            tone={wins ? tone : scored.wer > 0.5 ? "bad" : undefined}
           />
           <Stat
             label="S / D / I"
@@ -281,7 +282,13 @@ function Body({
           </div>
           <EmbeddingVis
             vector={result.embedding.vector}
-            tone={tone === "v2" ? "var(--color-v2)" : "var(--color-v1)"}
+            tone={
+              tone === "v2"
+                ? "var(--color-v2)"
+                : tone === "v3"
+                  ? "var(--color-v3)"
+                  : "var(--color-v1)"
+            }
           />
           <VectorStats vector={result.embedding.vector} />
           <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">

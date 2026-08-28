@@ -8,7 +8,8 @@ nothing is mocked or pre-recorded.
 
 | | Model id | Notes |
 |---|---|---|
-| **NGenSTT-V2-Large** | `ngenstt-v2-large` | Base: NGen-4-Lite-ASR. Strongest on Arabic and English. |
+| **NGenSTT-V2-Large** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English. |
+| **NGenSTT-V2 + AGen** | `ngenstt-v2-large` + AGen | V2's acoustic pass with the Qwen correction stage on top. |
 | **NGenSTT-V2 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus a Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
 
 ### V2 cannot be forced to most Indic languages
@@ -183,8 +184,24 @@ Where it is genuinely useful is the script story. On one Telugu recording:
 
 | Engine | WER | Output |
 |---|---|---|
-| V2 | 97.8% | `ये तो एक डिबेटेबल क्वेश्चन है।` — Devanagari |
-| V2 Indic | 93.1% | `అప్పుడే ఇది…` — Telugu script |
+| V2 | 97.6% | `ये तो एक डिबेटेबल क्वेश्चन है।` — all Devanagari |
+| V2 + AGen | 96.6% | partially converted — `అలీ పూరి ఇంకా ఆప్షన్…`, much still Devanagari |
+| V2 Indic | 94.1% | `అప్పుడే ఇది…` — Telugu script throughout |
+
+**Correction cannot retrofit a missing language head.** V2 + AGen barely improves
+on bare V2 because AGen receives Devanagari text with no acoustic evidence that
+the speech was Telugu, so it converts inconsistently. V2 Indic wins because its
+acoustic model has a Telugu head to begin with. On a single 200 s recording where
+everything scores 94–98% the one-point gaps are not significant; the script
+difference is what to read.
+
+### Shared acoustic passes
+
+Engines that wrap the same acoustic model — V2 and V2 + AGen both run
+`ngenstt-v2-large` — issue that model **once** per clip and derive the correction
+variant from the shared result. Running it twice doubled GPU load for no new
+information and pushed both requests past the gateway's 100 s limit, returning
+HTTP 524 on long audio.
 
 ## Scoring
 

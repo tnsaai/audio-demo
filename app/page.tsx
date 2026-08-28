@@ -96,7 +96,7 @@ export default function Playground() {
           <div className="space-y-1.5">
             <Label>Model</Label>
             <div className="flex rounded-xl border border-[var(--color-line)] bg-[var(--color-raised)] p-1">
-              {(["v2", "indic", "both"] as ModelChoice[]).map((choice) => (
+              {(["v2", "v2agen", "indic", "both"] as ModelChoice[]).map((choice) => (
                 <button
                   key={choice}
                   type="button"
@@ -109,7 +109,7 @@ export default function Playground() {
                       : "text-[var(--color-muted)] hover:text-white"
                   )}
                 >
-                  {choice === "both" ? "Both" : ENGINES[choice].short}
+                  {choice === "both" ? "All" : ENGINES[choice].short}
                 </button>
               ))}
             </div>
@@ -169,7 +169,7 @@ export default function Playground() {
         </Card>
       ) : null}
 
-      <div className={cn("grid gap-5", engines.length > 1 && "lg:grid-cols-2")}>
+      <div className={cn("grid gap-5", engines.length > 1 && "lg:grid-cols-3")}>
         {engines.map((engine) => (
           <EnginePanel
             key={engine}

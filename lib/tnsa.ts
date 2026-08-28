@@ -109,6 +109,8 @@ type RunOptions = {
   targetLanguage?: string;
   /** Skip the 1024-dim embedding when the caller only needs text. */
   includeEmbedding?: boolean;
+  /** Return the raw acoustic result; the caller applies correction itself. */
+  skipCorrection?: boolean;
   chunkSeconds?: number;
   signal?: AbortSignal;
 };
@@ -135,9 +137,13 @@ export async function runEngine(
   form.set("stt_model", ENGINES[opts.engine].id);
   // V2 hard-500s on Indic codes it does not cover, so an unsupported request
   // becomes auto detection rather than a crashed run.
+  // Keyed off the model id, not the engine key — more than one engine runs the
+  // same acoustic model and they all inherit its language limits.
   const requested = opts.language ?? "auto";
   const language =
-    opts.engine === "v2" && !V2_LANGUAGES.has(requested) ? "auto" : requested;
+    ENGINES[opts.engine].id === "ngenstt-v2-large" && !V2_LANGUAGES.has(requested)
+      ? "auto"
+      : requested;
   form.set("language", language);
   form.set("include", include.join(","));
   if (opts.targetLanguage) form.set("target_language", opts.targetLanguage);
@@ -189,16 +195,20 @@ export async function runEngine(
     );
   }
 
-  if (!ENGINES[opts.engine].correction) {
-    return { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
-  }
+  const withWall = { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
+  if (opts.skipCorrection || !ENGINES[opts.engine].correction) return withWall;
+  return applyCorrection(withWall, opts);
+}
 
-  // Indic engine: run the Qwen script-repair pass over the acoustic output.
+/** Run the AGen (Qwen) script-repair pass over an acoustic result. */
+export async function applyCorrection(
+  payload: OutputsResponse,
+  opts: { language?: string; targetLanguage?: string; signal?: AbortSignal }
+): Promise<OutputsResponse> {
+  const started = Date.now();
   const transcript = payload.transcript;
   const target = opts.targetLanguage || opts.language || transcript?.language;
-  if (!transcript?.segments?.length || !target || target === "auto") {
-    return { ...payload, latency: { ...payload.latency, wall_ms: Date.now() - started } };
-  }
+  if (!transcript?.segments?.length || !target || target === "auto") return payload;
 
   const correctionStarted = Date.now();
   let corrected: Map<number, string>;
@@ -216,11 +226,7 @@ export async function runEngine(
   } catch (cause) {
     // A correction failure must not lose a good acoustic transcript. Return the
     // uncorrected result rather than failing the whole run.
-    return {
-      ...payload,
-      latency: { ...payload.latency, wall_ms: Date.now() - started },
-      correctionError: (cause as Error).message,
-    };
+    return { ...payload, correctionError: (cause as Error).message };
   }
 
   const segments = transcript.segments.map((segment) => {
@@ -242,7 +248,7 @@ export async function runEngine(
     latency: {
       ...payload.latency,
       correction_ms: Date.now() - correctionStarted,
-      wall_ms: Date.now() - started,
+      wall_ms: (payload.latency.wall_ms ?? 0) + (Date.now() - started),
     },
   };
 }
@@ -316,3 +322,56 @@ export async function health(): Promise<Record<string, unknown>> {
 
 export const apiBase = BASE;
 export const hasKey = () => Boolean(KEY);
+
+/**
+ * Run a set of engines over one clip, sharing acoustic work.
+ *
+ * Several engines can wrap the same acoustic model — V2 and V2+AGen both run
+ * `ngenstt-v2-large` and differ only in the correction stage. Issuing that
+ * model twice doubles GPU load for no new information, and on a long clip it
+ * pushes both requests past the gateway timeout. So each distinct model runs
+ * once and the correction variants are derived from the shared result.
+ */
+export async function runEngines(
+  audio: Blob,
+  filename: string,
+  engines: EngineKey[],
+  opts: Omit<RunOptions, "engine">
+): Promise<Map<EngineKey, { ok: true; result: OutputsResponse } | { ok: false; error: unknown }>> {
+  const byModel = new Map<string, EngineKey[]>();
+  for (const engine of engines) {
+    const id = ENGINES[engine].id;
+    byModel.set(id, [...(byModel.get(id) ?? []), engine]);
+  }
+
+  const out = new Map<EngineKey, { ok: true; result: OutputsResponse } | { ok: false; error: unknown }>();
+
+  await Promise.all(
+    [...byModel.entries()].map(async ([, group]) => {
+      // Any engine in the group identifies the model; run the acoustic pass raw.
+      let base: OutputsResponse;
+      try {
+        base = await runEngine(audio, filename, { ...opts, engine: group[0], skipCorrection: true });
+      } catch (error) {
+        for (const engine of group) out.set(engine, { ok: false, error });
+        return;
+      }
+
+      // Correction variants are sequential: they hit the same AGen worker, and
+      // firing them together only queues behind each other anyway.
+      for (const engine of group) {
+        if (!ENGINES[engine].correction) {
+          out.set(engine, { ok: true, result: base });
+          continue;
+        }
+        try {
+          out.set(engine, { ok: true, result: await applyCorrection(base, opts) });
+        } catch (error) {
+          out.set(engine, { ok: false, error });
+        }
+      }
+    })
+  );
+
+  return out;
+}
