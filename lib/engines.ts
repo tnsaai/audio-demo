@@ -15,20 +15,6 @@ export const ENGINES = {
     correction: false,
     blurb: "QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi.",
   },
-  v2indic: {
-    id: "ngenstt-v2-large",
-    key: "v2indic" as const,
-    name: "NGenSTT-V2 Indic",
-    short: "V2 Indic",
-    base: "QwenASR-1.7B + AGen (Qwen) script repair",
-    /**
-     * Same acoustic model as V2, with the correction pass bolted on. V2 has no
-     * head for most Indic languages and emits them phonetically in Devanagari;
-     * this asks AGen to rewrite that into the target script afterwards.
-     */
-    correction: true,
-    blurb: "V2's acoustic pass with the Qwen correction stage applied on top.",
-  },
   v1indic: {
     id: "tnsa-ngen-stt-v1",
     key: "v1indic" as const,
@@ -57,10 +43,10 @@ export const ENGINES = {
 export const V2_LANGUAGES = new Set(["auto", "ar", "en", "hi", "fa"]);
 
 export type EngineKey = keyof typeof ENGINES;
-export const ENGINE_KEYS: EngineKey[] = ["v2", "v2indic", "v1indic"];
+export const ENGINE_KEYS: EngineKey[] = ["v2", "v1indic"];
 
 export function isEngineKey(value: string): value is EngineKey {
-  return value === "v2" || value === "v2indic" || value === "v1indic";
+  return value === "v2" || value === "v1indic";
 }
 
 /**

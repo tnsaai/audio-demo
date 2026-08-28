@@ -8,9 +8,14 @@ nothing is mocked or pre-recorded.
 
 | | Model id | Notes |
 |---|---|---|
-| **V2** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English. |
-| **V2 Indic** | `ngenstt-v2-large` + AGen | Same acoustic model as V2, with the Qwen correction stage on top. |
+| **V2** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi. |
 | **V1 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus the Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
+
+A third engine, V2 Indic (`ngenstt-v2-large` + AGen), was measured and dropped.
+Correction cannot retrofit a language head the acoustic model lacks: it converted
+Indic script only partially and still trailed V1 Indic (96.6% vs 94.1% WER on a
+Telugu recording) at roughly 1.7x the compute. V1 has the Indic heads V2 lacks,
+so it starts from the right script rather than being repaired into it.
 
 The naming says exactly what each is: the number is the acoustic model, "Indic"
 means the AGen correction stage is applied. All three are selectable everywhere —
@@ -190,8 +195,7 @@ Where it is genuinely useful is the script story. On one Telugu recording:
 | Engine | WER | Output |
 |---|---|---|
 | V2 | 97.6% | `ये तो एक डिबेटेबल क्वेश्चन है।` — all Devanagari |
-| V2 + AGen | 96.6% | partially converted — `అలీ పూరి ఇంకా ఆప్షన్…`, much still Devanagari |
-| V2 Indic | 94.1% | `అప్పుడే ఇది…` — Telugu script throughout |
+| V1 Indic | 94.1% | `అప్పుడే ఇది…` — Telugu script throughout |
 
 **Correction cannot retrofit a missing language head.** V2 + AGen barely improves
 on bare V2 because AGen receives Devanagari text with no acoustic evidence that

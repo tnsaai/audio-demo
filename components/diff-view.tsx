@@ -40,7 +40,7 @@ export function DiffView({
           return (
             <div key={hypothesis.engine.key}>
               <div className="mb-2 flex items-center gap-2">
-                <Badge tone={hypothesis.engine.key === "v2" ? "v2" : hypothesis.engine.key === "v2indic" ? "v3" : "v1"}>{hypothesis.engine.short}</Badge>
+                <Badge tone={hypothesis.engine.key === "v2" ? "v2" : "v1"}>{hypothesis.engine.short}</Badge>
                 <span className="text-[12px] text-[var(--color-muted)]">{hypothesis.engine.name}</span>
               </div>
               <p
