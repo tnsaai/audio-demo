@@ -169,7 +169,7 @@ export default function Benchmark() {
                 <th className="pb-2 font-medium">Language</th>
                 <th className="pb-2 font-medium">Condition</th>
                 <th className="pb-2 text-right font-medium">{ENGINES.v2.short} WER</th>
-                <th className="pb-2 text-right font-medium">{ENGINES.indic.short} WER</th>
+                <th className="pb-2 text-right font-medium">{ENGINES.v1indic.short} WER</th>
                 <th className="pb-2 text-right font-medium">Delta</th>
               </tr>
             </thead>
@@ -182,10 +182,10 @@ export default function Benchmark() {
                     {row.v2.toFixed(1)}%
                   </td>
                   <td className="py-2 text-right font-mono tabular-nums text-[var(--color-v1)]">
-                    {row.indic.toFixed(1)}%
+                    {row.v1indic.toFixed(1)}%
                   </td>
                   <td className="py-2 text-right font-mono tabular-nums text-[var(--color-muted)]">
-                    −{(row.indic - row.v2).toFixed(1)}
+                    −{(row.v1indic - row.v2).toFixed(1)}
                   </td>
                 </tr>
               ))}
@@ -336,16 +336,16 @@ export default function Benchmark() {
                   <tr className="text-left text-[11px] uppercase tracking-[0.09em] text-[var(--color-muted)]">
                     <th className="pb-2 font-medium">Condition</th>
                     <th className="pb-2 text-right font-medium">{ENGINES.v2.short} WER</th>
-                    <th className="pb-2 text-right font-medium">{ENGINES.indic.short} WER</th>
+                    <th className="pb-2 text-right font-medium">{ENGINES.v1indic.short} WER</th>
                     <th className="pb-2 text-right font-medium">Delta</th>
                     <th className="pb-2 text-right font-medium">{ENGINES.v2.short} latency</th>
-                    <th className="pb-2 text-right font-medium">{ENGINES.indic.short} latency</th>
+                    <th className="pb-2 text-right font-medium">{ENGINES.v1indic.short} latency</th>
                   </tr>
                 </thead>
                 <tbody>
                   {CONDITIONS.map((condition) => {
                     const a = cell(condition.id, "v2");
-                    const b = cell(condition.id, "indic");
+                    const b = cell(condition.id, "v1indic");
                     if (!a && !b) return null;
                     return (
                       <tr key={condition.id} className="border-t border-[var(--color-line)]">
@@ -384,8 +384,8 @@ export default function Benchmark() {
               {(() => {
                 const clean = cell("clean", "v2");
                 const noisy = cell("tel8k_noisy", "v2");
-                const cleanV1 = cell("clean", "indic");
-                const noisyV1 = cell("tel8k_noisy", "indic");
+                const cleanV1 = cell("clean", "v1indic");
+                const noisyV1 = cell("tel8k_noisy", "v1indic");
                 if (!clean || !noisy || !cleanV1 || !noisyV1) return null;
                 return (
                   <div className="mt-5 grid grid-cols-2 gap-5 sm:grid-cols-4">
@@ -396,7 +396,7 @@ export default function Benchmark() {
                       tone="v2"
                     />
                     <Stat
-                      label={`${ENGINES.indic.short} degradation`}
+                      label={`${ENGINES.v1indic.short} degradation`}
                       value={`+${((noisyV1.wer - cleanV1.wer) * 100).toFixed(1)}`}
                       hint="WER points, clean → noisy"
                       tone="v1"
@@ -491,7 +491,7 @@ export default function Benchmark() {
                   <tr key={index} className="border-b border-[var(--color-line)] last:border-0">
                     <td className="py-1.5 pr-3 font-mono text-[var(--color-muted)]">{row.sample}</td>
                     <td className="py-1.5 pr-3">
-                      <Badge tone={row.engine === "v2" ? "v2" : row.engine === "v2agen" ? "v3" : "v1"}>{ENGINES[row.engine].short}</Badge>
+                      <Badge tone={row.engine === "v2" ? "v2" : row.engine === "v2indic" ? "v3" : "v1"}>{ENGINES[row.engine].short}</Badge>
                     </td>
                     <td className="py-1.5 pr-3 text-[var(--color-muted)]">
                       {CONDITIONS.find((c) => c.id === row.condition)?.label}

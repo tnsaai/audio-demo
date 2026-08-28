@@ -85,7 +85,7 @@ export function EnginePanel({
 }) {
   const engine = ENGINES[engineKey];
   const tone: "v2" | "v1" | "v3" =
-    engineKey === "indic" ? "v1" : engineKey === "v2agen" ? "v3" : "v2";
+    engineKey === "v1indic" ? "v1" : engineKey === "v2indic" ? "v3" : "v2";
 
   return (
     <Card className="flex h-full flex-col">

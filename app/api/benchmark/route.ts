@@ -27,6 +27,10 @@ export type BenchmarkEvent =
       empty: boolean;
       latencyMs: number;
       text: string;
+      /** Correction-stage telemetry, so a silent no-op is distinguishable. */
+      correctionMs?: number;
+      correctedSegments?: number;
+      correctionError?: string;
     }
   | {
       /** Embedding robustness: same utterance, clean vs a degraded condition. */
@@ -153,6 +157,9 @@ export async function POST(request: Request) {
               empty: scored.empty,
               latencyMs: payload.latency.total_ms,
               text,
+              correctionMs: payload.latency.correction_ms,
+              correctedSegments: payload.transcript?.corrected_segment_count,
+              correctionError: payload.correctionError,
             });
 
             const vector = payload.embedding?.vector;
@@ -262,6 +269,9 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
             empty: scored.empty,
             latencyMs: payload.latency.total_ms,
             text,
+            correctionMs: payload.latency.correction_ms,
+            correctedSegments: payload.transcript?.corrected_segment_count,
+            correctionError: payload.correctionError,
           });
         });
       }

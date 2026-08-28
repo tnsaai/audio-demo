@@ -9,7 +9,7 @@ import { DiffView } from "@/components/diff-view";
 import { Badge, Button, Card, CardBody, CardHead, Label, Select } from "@/components/ui";
 import { ENGINES, ENGINE_KEYS, type EngineKey } from "@/lib/engines";
 import { LANGUAGE_GROUPS, isRtl, languageName } from "@/lib/lang";
-import { score } from "@/lib/wer";
+import { score, type Score } from "@/lib/wer";
 import { cn } from "@/lib/cn";
 
 type CompareResponse = {
@@ -19,8 +19,8 @@ type CompareResponse = {
 };
 
 /**
- * Formal comparison — both engines on one clip, scored against a reference
- * where one exists, with a word-level diff and the cross-engine language check.
+ * Formal comparison — every engine on one clip, scored against a reference
+ * where one exists, with a word-level diff and a cross-engine language check.
  */
 export default function Compare() {
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -60,36 +60,66 @@ export default function Compare() {
   };
 
   const runOf = (key: EngineKey) => response?.runs.find((item) => item.engine === key) ?? null;
-  const v2 = runOf("v2");
-  const v1 = runOf("indic");
-
   const reference = response?.reference ?? null;
   const referenceLanguage = response?.referenceLanguage ?? null;
 
-  const languageOf = (item: Run | null) =>
-    item?.ok ? item.result.transcript?.language ?? null : null;
-  const v2Language = languageOf(v2);
-  const v1Language = languageOf(v1);
-  const disputed = Boolean(v2Language && v1Language && v2Language !== v1Language);
+  /** Detected language per engine, for the disagreement check. */
+  const languages = useMemo(() => {
+    const out = new Map<EngineKey, string | null>();
+    for (const key of ENGINE_KEYS) {
+      const item = runOf(key);
+      out.set(key, item?.ok ? item.result.transcript?.language ?? null : null);
+    }
+    return out;
+  }, [response]);
+
+  const distinct = [...new Set([...languages.values()].filter(Boolean))] as string[];
+  const disputed = distinct.length > 1;
 
   const scores = useMemo(() => {
-    if (!reference) return { v2: null, v1: null };
-    const textOf = (item: Run | null) => (item?.ok ? item.result.transcript?.text ?? "" : null);
-    const a = textOf(v2);
-    const b = textOf(v1);
-    return {
-      v2: a == null ? null : score(reference, a, referenceLanguage ?? undefined),
-      v1: b == null ? null : score(reference, b, referenceLanguage ?? undefined),
-    };
-  }, [reference, referenceLanguage, v2, v1]);
+    const out = new Map<EngineKey, Score | null>();
+    for (const key of ENGINE_KEYS) {
+      const item = runOf(key);
+      const text = item?.ok ? item.result.transcript?.text ?? "" : null;
+      out.set(
+        key,
+        reference && text != null ? score(reference, text, referenceLanguage ?? undefined) : null
+      );
+    }
+    return out;
+  }, [response, reference, referenceLanguage]);
+
+  /** Best score among the *other* engines, so each panel can mark a winner. */
+  const bestPeer = (key: EngineKey): Score | null => {
+    const others = ENGINE_KEYS.filter((k) => k !== key)
+      .map((k) => scores.get(k))
+      .filter((s): s is Score => Boolean(s));
+    if (!others.length) return null;
+    return others.reduce((best, s) => (s.wer < best.wer ? s : best));
+  };
+
+  /** Any other engine that read the language differently. */
+  const disagreesWith = (key: EngineKey): string | null => {
+    const mine = languages.get(key);
+    if (!mine) return null;
+    for (const other of ENGINE_KEYS) {
+      const theirs = languages.get(other);
+      if (other !== key && theirs && theirs !== mine) return theirs;
+    }
+    return null;
+  };
+
+  const okRuns = ENGINE_KEYS.map((key) => ({ key, run: runOf(key) })).filter(
+    (entry): entry is { key: EngineKey; run: Extract<Run, { ok: true }> } => Boolean(entry.run?.ok)
+  );
 
   return (
     <div className="space-y-6">
       <header className="space-y-1.5">
         <h1 className="text-[22px] font-semibold tracking-tight text-white">Comparison</h1>
         <p className="max-w-3xl text-[13px] leading-relaxed text-[var(--color-muted)]">
-          The same clip through both engines at once, scored against the reference where there is
-          one, and aligned word by word. For an unscored look at a single model, use the playground.
+          One clip through every engine at once, scored against the reference where there is one,
+          and aligned word by word. For an unscored look at a single model, use the playground.
         </p>
       </header>
 
@@ -135,7 +165,7 @@ export default function Compare() {
 
           <Button variant="primary" onClick={run} disabled={!selection || busy} className="ml-auto">
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {busy ? "Running both engines…" : "Run comparison"}
+            {busy ? `Running ${ENGINE_KEYS.length} engines…` : "Run comparison"}
           </Button>
         </CardBody>
       </Card>
@@ -155,12 +185,12 @@ export default function Compare() {
                 The engines disagree on the spoken language
               </div>
               <p className="text-[12px] leading-relaxed text-[var(--color-body)]">
-                {ENGINES.v2.short} detected{" "}
-                <strong>{languageName(v2Language)}</strong>, {ENGINES.indic.short} detected{" "}
-                <strong>{languageName(v1Language)}</strong>. One of them is transliterating rather
-                than transcribing — writing the speech phonetically into the wrong script, which
-                reads as fluent text but means nothing. Force the spoken language above and re-run
-                to find out which.
+                {ENGINE_KEYS.filter((key) => languages.get(key))
+                  .map((key) => `${ENGINES[key].short} read ${languageName(languages.get(key))}`)
+                  .join(", ")}
+                . At least one is transliterating rather than transcribing — writing the speech
+                phonetically into the wrong script, which reads as fluent text but means nothing.
+                Force the spoken language above and re-run to find out which.
               </p>
             </div>
           </CardBody>
@@ -172,9 +202,7 @@ export default function Compare() {
           <CardHead className="flex items-center gap-2">
             <div className="text-[14px] font-medium text-white">Reference</div>
             <Badge>{languageName(referenceLanguage)}</Badge>
-            <span className="ml-auto text-[11px] text-[var(--color-muted)]">
-              ground truth from the ARen set
-            </span>
+            <span className="ml-auto text-[11px] text-[var(--color-muted)]">ground truth</span>
           </CardHead>
           <CardBody>
             <p className={cn("script-text", isRtl(referenceLanguage) && "rtl")}>{reference}</p>
@@ -182,35 +210,29 @@ export default function Compare() {
         </Card>
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <EnginePanel
-          engineKey="v2"
-          run={v2}
-          reference={reference}
-          referenceLanguage={referenceLanguage}
-          peerScore={scores.v1}
-          disagreesWith={v1Language}
-          busy={busy}
-        />
-        <EnginePanel
-          engineKey="indic"
-          run={v1}
-          reference={reference}
-          referenceLanguage={referenceLanguage}
-          peerScore={scores.v2}
-          disagreesWith={v2Language}
-          busy={busy}
-        />
+      <div className="grid gap-5 lg:grid-cols-3">
+        {ENGINE_KEYS.map((key) => (
+          <EnginePanel
+            key={key}
+            engineKey={key}
+            run={runOf(key)}
+            reference={reference}
+            referenceLanguage={referenceLanguage}
+            peerScore={bestPeer(key)}
+            disagreesWith={disagreesWith(key)}
+            busy={busy}
+          />
+        ))}
       </div>
 
-      {reference && v2?.ok && v1?.ok ? (
+      {reference && okRuns.length > 1 ? (
         <DiffView
           reference={reference}
           language={referenceLanguage}
-          hypotheses={[
-            { engine: ENGINES.v2, text: v2.result.transcript?.text ?? "" },
-            { engine: ENGINES.indic, text: v1.result.transcript?.text ?? "" },
-          ]}
+          hypotheses={okRuns.map(({ key, run: item }) => ({
+            engine: ENGINES[key],
+            text: item.result.transcript?.text ?? "",
+          }))}
         />
       ) : null}
     </div>

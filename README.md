@@ -8,9 +8,14 @@ nothing is mocked or pre-recorded.
 
 | | Model id | Notes |
 |---|---|---|
-| **NGenSTT-V2-Large** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English. |
-| **NGenSTT-V2 + AGen** | `ngenstt-v2-large` + AGen | V2's acoustic pass with the Qwen correction stage on top. |
-| **NGenSTT-V2 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus a Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
+| **V2** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English. |
+| **V2 Indic** | `ngenstt-v2-large` + AGen | Same acoustic model as V2, with the Qwen correction stage on top. |
+| **V1 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus the Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
+
+The naming says exactly what each is: the number is the acoustic model, "Indic"
+means the AGen correction stage is applied. All three are selectable everywhere —
+playground, comparison, and benchmark — so you can judge them per language rather
+than take a routing decision on trust.
 
 ### V2 cannot be forced to most Indic languages
 

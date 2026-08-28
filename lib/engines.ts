@@ -15,11 +15,11 @@ export const ENGINES = {
     correction: false,
     blurb: "QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi.",
   },
-  v2agen: {
+  v2indic: {
     id: "ngenstt-v2-large",
-    key: "v2agen" as const,
-    name: "NGenSTT-V2 + AGen",
-    short: "V2+AGen",
+    key: "v2indic" as const,
+    name: "NGenSTT-V2 Indic",
+    short: "V2 Indic",
     base: "QwenASR-1.7B + AGen (Qwen) script repair",
     /**
      * Same acoustic model as V2, with the correction pass bolted on. V2 has no
@@ -29,11 +29,11 @@ export const ENGINES = {
     correction: true,
     blurb: "V2's acoustic pass with the Qwen correction stage applied on top.",
   },
-  indic: {
+  v1indic: {
     id: "tnsa-ngen-stt-v1",
-    key: "indic" as const,
-    name: "NGenSTT-V2 Indic",
-    short: "V2 Indic",
+    key: "v1indic" as const,
+    name: "NGenSTT-V1 Indic",
+    short: "V1 Indic",
     base: "tnsa-ngen-stt-v1 + AGen (Qwen) script repair",
     /**
      * Runs the AGen correction pass over the STT output. That pass is what
@@ -57,26 +57,26 @@ export const ENGINES = {
 export const V2_LANGUAGES = new Set(["auto", "ar", "en", "hi", "fa"]);
 
 export type EngineKey = keyof typeof ENGINES;
-export const ENGINE_KEYS: EngineKey[] = ["v2", "v2agen", "indic"];
+export const ENGINE_KEYS: EngineKey[] = ["v2", "v2indic", "v1indic"];
 
 export function isEngineKey(value: string): value is EngineKey {
-  return value === "v2" || value === "v2agen" || value === "indic";
+  return value === "v2" || value === "v2indic" || value === "v1indic";
 }
 
 /**
  * Published ARen results, 594 transcriptions.
  *
- * These predate the Indic correction stage: the `indic` column is the raw
+ * These predate the Indic correction stage: the `v1indic` column is the raw
  * `tnsa-ngen-stt-v1` acoustic pass, scored on Arabic and English where the
  * script-repair stage has nothing to do.
  */
 export const PUBLISHED_RESULTS = [
-  { lang: "Arabic", condition: "clean", v2: 8.1, indic: 12.2 },
-  { lang: "Arabic", condition: "telephony 8 kHz", v2: 10.9, indic: 14.4 },
-  { lang: "Arabic", condition: "telephony + noise", v2: 15.6, indic: 21.1 },
-  { lang: "English", condition: "clean", v2: 6.0, indic: 9.6 },
-  { lang: "English", condition: "telephony 8 kHz", v2: 6.8, indic: 10.8 },
-  { lang: "English", condition: "telephony + noise", v2: 37.8, indic: 40.0 },
+  { lang: "Arabic", condition: "clean", v2: 8.1, v1indic: 12.2 },
+  { lang: "Arabic", condition: "telephony 8 kHz", v2: 10.9, v1indic: 14.4 },
+  { lang: "Arabic", condition: "telephony + noise", v2: 15.6, v1indic: 21.1 },
+  { lang: "English", condition: "clean", v2: 6.0, v1indic: 9.6 },
+  { lang: "English", condition: "telephony 8 kHz", v2: 6.8, v1indic: 10.8 },
+  { lang: "English", condition: "telephony + noise", v2: 37.8, v1indic: 40.0 },
 ] as const;
 
 export const CONDITIONS = [
