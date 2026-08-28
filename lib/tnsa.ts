@@ -16,6 +16,32 @@ const KEY = process.env.TNSA_API_KEY ?? "";
 const OUTPUTS_MODEL = "tnsa-ngen-outputs-v1";
 const AGEN_MODEL = "agen-multilingual-v1";
 
+/** Statuses worth retrying: gateway hiccups and upstream restarts, not 4xx. */
+const RETRYABLE = new Set([429, 500, 502, 503, 504, 520, 521, 522, 524]);
+const MAX_ATTEMPTS = 3;
+
+/**
+ * Turn a gateway failure into something readable.
+ *
+ * A 502 from Cloudflare is a full HTML error page; dumping it into the failures
+ * list buries the actual signal under markup.
+ */
+function describeFailure(status: number, body: string): string {
+  const looksHtml = /^\s*<(!doctype|html)/i.test(body);
+  if (looksHtml || !body.trim()) {
+    const hint =
+      status === 502 || status === 503 || status === 504
+        ? " — the inference box is unreachable or restarting"
+        : status === 524
+          ? " — the request exceeded the gateway timeout"
+          : "";
+    return `gateway error (HTTP ${status})${hint}`;
+  }
+  return `HTTP ${status}: ${body.slice(0, 200)}`;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class TnsaError extends Error {
   constructor(
     readonly code: string,
@@ -153,35 +179,61 @@ export async function runEngine(
   if (opts.chunkSeconds) form.set("chunk_seconds", String(opts.chunkSeconds));
 
   const started = Date.now();
-  let response: Response;
-  try {
-    response = await fetch(`${BASE}/outputs`, {
-      method: "POST",
-      headers: headers(),
-      body: form,
-      signal: opts.signal,
-      cache: "no-store",
-    });
-  } catch (cause) {
-    throw new TnsaError(
-      "transport_error",
-      `Could not reach ${BASE}: ${(cause as Error).message}`,
-      true
-    );
-  }
 
-  const raw = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new TnsaError("bad_response", `Non-JSON response (HTTP ${response.status}): ${raw.slice(0, 300)}`);
+  // A shared GPU box restarts, and the gateway in front of it returns 502/504
+  // during that window. Retrying a handful of times turns a whole failed
+  // benchmark run into a few slow rows.
+  let raw = "";
+  let status = 0;
+  let lastError: TnsaError | null = null;
+  let parsed: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(`${BASE}/outputs`, {
+        method: "POST",
+        headers: headers(),
+        body: form,
+        signal: opts.signal,
+        cache: "no-store",
+      });
+      status = response.status;
+      raw = await response.text();
+    } catch (cause) {
+      if ((cause as Error).name === "AbortError") throw cause;
+      lastError = new TnsaError(
+        "transport_error",
+        `Could not reach ${BASE}: ${(cause as Error).message}`,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+      throw lastError;
+    }
+
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed === null) {
+      lastError = new TnsaError("gateway_error", describeFailure(status, raw), RETRYABLE.has(status));
+      if (RETRYABLE.has(status) && attempt < MAX_ATTEMPTS) {
+        await sleep(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+      throw lastError;
+    }
+    break;
   }
 
   const err = (parsed as { error?: { code: string; message: string; retryable?: boolean } }).error;
   if (err) throw new TnsaError(err.code, err.message, err.retryable ?? false);
-  if (!response.ok) {
-    throw new TnsaError("http_error", `HTTP ${response.status}: ${raw.slice(0, 300)}`);
+  if (status && status >= 400) {
+    throw new TnsaError("http_error", describeFailure(status, raw));
   }
 
   const payload = parsed as OutputsResponse;
@@ -309,7 +361,11 @@ export async function correctSegments(
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new TnsaError("agen_error", `AGen HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    throw new TnsaError(
+      "agen_error",
+      describeFailure(response.status, await response.text()),
+      RETRYABLE.has(response.status)
+    );
   }
 
   const parsed = (await response.json()) as {
@@ -410,7 +466,7 @@ export async function runEngines(
     const base = acoustic.get(modelId);
     if (!base) continue;
     for (const engine of group) {
-      if (!ENGINES[engine].correction) {
+      if (!ENGINES[engine].correction || opts.skipCorrection) {
         out.set(engine, { ok: true, result: base });
         continue;
       }

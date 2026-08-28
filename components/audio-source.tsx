@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 
-import { CONDITIONS, type ConditionId } from "@/lib/engines";
+import { CONDITIONS, DIARBENCH_LANGUAGES, type ConditionId } from "@/lib/engines";
 import { languageName } from "@/lib/lang";
 import { cn } from "@/lib/cn";
 import { Badge, Button, Card, CardBody, CardHead, Label, Select } from "./ui";
@@ -11,7 +11,7 @@ import { WaveformPlayer, WaveformRecorder } from "./waveform";
 
 export type Sample = {
   id: string;
-  origin: "aren" | "custom";
+  origin: "aren" | "custom" | "diarbench";
   label: string;
   language: string | null;
   source: string;
@@ -36,22 +36,38 @@ export function AudioSource({ selection, onSelect, disabled }: Props) {
   const [customDir, setCustomDir] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [languageFilter, setLanguageFilter] = useState("all");
+  const [loadingIndic, setLoadingIndic] = useState(false);
   const [condition, setCondition] = useState<ConditionId>("clean");
 
+  // An Indic language config is fetched on selection; the ARen bank loads once.
   useEffect(() => {
+    const indic = DIARBENCH_LANGUAGES.includes(
+      languageFilter as (typeof DIARBENCH_LANGUAGES)[number]
+    );
+    let cancelled = false;
+    setLoadingIndic(indic);
     void (async () => {
       try {
-        const response = await fetch("/api/samples");
+        const response = await fetch(
+          indic ? `/api/samples?indic=${encodeURIComponent(languageFilter)}` : "/api/samples"
+        );
         const payload = (await response.json()) as { samples: Sample[]; customDir: string | null };
+        if (cancelled) return;
         setSamples(payload.samples ?? []);
         setCustomDir(payload.customDir);
       } catch {
-        setSamples([]);
+        if (!cancelled) setSamples([]);
       } finally {
-        setLoaded(true);
+        if (!cancelled) {
+          setLoaded(true);
+          setLoadingIndic(false);
+        }
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [languageFilter]);
 
   const languages = useMemo(() => {
     const set = new Set<string>();
@@ -59,10 +75,12 @@ export function AudioSource({ selection, onSelect, disabled }: Props) {
     return [...set].sort();
   }, [samples]);
 
-  const visible = useMemo(
-    () => (languageFilter === "all" ? samples : samples.filter((s) => s.language === languageFilter)),
-    [samples, languageFilter]
-  );
+  const visible = useMemo(() => {
+    if (languageFilter === "all") return samples;
+    // Indic configs come back already scoped to the requested language.
+    if (samples.some((item) => item.origin === "diarbench")) return samples;
+    return samples.filter((item) => item.language === languageFilter);
+  }, [samples, languageFilter]);
 
   return (
     <Card>
@@ -105,12 +123,21 @@ export function AudioSource({ selection, onSelect, disabled }: Props) {
               onChange={(event) => setLanguageFilter(event.target.value)}
               disabled={disabled}
             >
-              <option value="all">All ({samples.length})</option>
-              {languages.map((code) => (
-                <option key={code} value={code}>
-                  {languageName(code)}
-                </option>
-              ))}
+              <optgroup label="Arabic & English (ARen)">
+                <option value="all">All ARen ({samples.length})</option>
+                {languages.map((code) => (
+                  <option key={code} value={code}>
+                    {languageName(code)}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Indian languages (DiarBench)">
+                {DIARBENCH_LANGUAGES.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </optgroup>
             </Select>
           </div>
 
@@ -136,11 +163,17 @@ export function AudioSource({ selection, onSelect, disabled }: Props) {
           </div>
 
           <p className="text-[12px] text-[var(--color-muted)]">
-            {CONDITIONS.find((item) => item.id === condition)?.detail}
+            {visible.some((item) => item.origin === "diarbench")
+              ? "Multi-speaker conversations, ~200 s each — a single run takes minutes."
+              : CONDITIONS.find((item) => item.id === condition)?.detail}
           </p>
         </div>
 
-        {!loaded ? (
+        {loadingIndic ? (
+          <div className="py-6 text-center text-[13px] text-[var(--color-muted)]">
+            loading {languageFilter} clips…
+          </div>
+        ) : !loaded ? (
           <div className="py-6 text-center text-[13px] text-[var(--color-muted)]">loading sample bank…</div>
         ) : samples.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[var(--color-line)] px-4 py-6 text-[13px] text-[var(--color-muted)]">

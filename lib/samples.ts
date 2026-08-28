@@ -4,6 +4,8 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { ConditionId } from "./engines";
+import { DIARBENCH_CODES } from "./engines";
+import { fetchDiarAudio, listDiarRows } from "./diarbench";
 
 /**
  * The sample bank, backed by the ARen dataset on Hugging Face.
@@ -44,7 +46,7 @@ export function hfAudioUrl(id: string, condition: ConditionId): string {
 
 export type Sample = {
   id: string;
-  origin: "aren" | "custom";
+  origin: "aren" | "custom" | "diarbench";
   label: string;
   language: string | null;
   source: string;
@@ -169,6 +171,30 @@ async function loadCustom(): Promise<Sample[]> {
   return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
+/**
+ * Indic clips from DiarBench, for one language config.
+ *
+ * Fetched on demand rather than eagerly: there are 22 language configs and
+ * listing them all would mean 22 round trips before the picker could render.
+ * Ids carry the language and row index so the signed audio URL — which expires —
+ * can be re-resolved at play time instead of being cached.
+ */
+export async function listIndicSamples(language: string): Promise<Sample[]> {
+  if (!DIARBENCH_CODES[language]) return [];
+  const { rows } = await listDiarRows(language, 25);
+  return rows.map((row) => ({
+    id: `diar:${language}:${row.index}`,
+    origin: "diarbench" as const,
+    label: row.recordingId,
+    language: row.languageCode,
+    source: row.datasetType,
+    duration: row.durationSeconds,
+    reference: row.reference,
+    conditions: ["clean"] as ConditionId[],
+    baseline: {},
+  }));
+}
+
 export async function listSamples(): Promise<Sample[]> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.samples;
   const samples = [...(await loadAren()), ...(await loadCustom())];
@@ -232,6 +258,18 @@ export async function loadSampleAudio(
     }
   }
 
+  if (id.startsWith("diar:")) {
+    const [, language, rawIndex] = id.split(":");
+    const index = Number(rawIndex);
+    if (!DIARBENCH_CODES[language] || !Number.isInteger(index)) return null;
+    // The signed URL is short-lived, so the row is re-listed to get a fresh one.
+    const { rows } = await listDiarRows(language, 25);
+    const row = rows.find((item) => item.index === index);
+    if (!row) return null;
+    const bytes = await fetchDiarAudio(row.audioUrl);
+    return bytes ? { bytes, name: `${row.recordingId}.wav`, contentType: "audio/wav" } : null;
+  }
+
   // Ids come from the manifest, but this also backstops a hand-crafted request.
   if (!/^[A-Za-z0-9_-]+$/.test(id)) return null;
   if (!CONDITION_IDS.includes(condition)) return null;
@@ -278,7 +316,7 @@ const MIME: Record<string, string> = {
  * serverless function; local and drop-in clips have to be proxied.
  */
 export function playbackRedirect(id: string, condition: ConditionId): string | null {
-  if (id.startsWith("custom:") || AREN_DIR) return null;
+  if (id.startsWith("custom:") || id.startsWith("diar:") || AREN_DIR) return null;
   if (!/^[A-Za-z0-9_-]+$/.test(id) || !CONDITION_IDS.includes(condition)) return null;
   return hfAudioUrl(id, condition);
 }

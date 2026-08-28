@@ -59,6 +59,26 @@ function cosine(a: number[], b: number[]): number {
 }
 
 /**
+ * Run `worker` over `items` with at most `limit` in flight.
+ *
+ * Clips were processed strictly one at a time, which left the GPU idle for the
+ * whole of every upload, download and correction round trip. The limit stays
+ * modest on purpose: the box is shared, and past a handful of concurrent long
+ * requests the gateway returns 504s rather than going faster.
+ */
+async function pool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+/**
  * Streams a benchmark run as NDJSON.
  *
  * Samples are the outer loop and conditions the inner one, so each clip's
@@ -79,7 +99,14 @@ export async function POST(request: Request) {
     benchmark?: BenchmarkId;
     /** DiarBench config name, e.g. "Telugu". */
     diarLanguage?: string;
+    /** Clips in flight at once. */
+    concurrency?: number;
+    /** Skip the AGen pass - much faster, and isolates the acoustic models. */
+    skipCorrection?: boolean;
   };
+
+  const concurrency = Math.max(1, Math.min(body.concurrency ?? 4, 8));
+  const skipCorrection = body.skipCorrection === true;
 
   const conditions: ConditionId[] = body.conditions?.length
     ? body.conditions
@@ -89,7 +116,13 @@ export async function POST(request: Request) {
   const withEmbeddings = body.embeddings !== false;
 
   if ((body.benchmark ?? "aren") === "diarbench") {
-    return runDiarBench(body.diarLanguage ?? "Telugu", Math.max(1, Math.min(body.limit ?? 2, 100)));
+    return runDiarBench(
+      body.diarLanguage ?? "Telugu",
+      Math.max(1, Math.min(body.limit ?? 2, 100)),
+      // DiarBench clips are ~200 s; keep fewer in flight than for ARen.
+      Math.max(1, Math.min(concurrency, 3)),
+      skipCorrection
+    );
   }
 
   const all = await listSamples();
@@ -108,7 +141,10 @@ export async function POST(request: Request) {
 
       send({ type: "start", total: chosen.length * conditions.length * ENGINE_KEYS.length });
 
-      for (const sample of chosen) {
+      // One task per sample, conditions sequential inside it: the clean vector
+      // must be in hand before its degraded variants arrive for the
+      // cross-condition embedding comparison.
+      await pool(chosen, concurrency, async (sample) => {
         let cleanVector: number[] | null = null;
 
         for (const condition of conditions) {
@@ -122,6 +158,7 @@ export async function POST(request: Request) {
           const results = await runEngines(audio, loaded.name, ENGINE_KEYS, {
             language: sample.language ?? "auto",
             includeEmbedding: withEmbeddings,
+            skipCorrection,
           });
 
           ENGINE_KEYS.forEach((engine) => {
@@ -178,7 +215,7 @@ export async function POST(request: Request) {
             }
           });
         }
-      }
+      });
 
       send({ type: "done", elapsedMs: Date.now() - started });
       controller.close();
@@ -200,7 +237,12 @@ export async function POST(request: Request) {
  * loop is flat. Clips are long (~200 s), so each one is a substantial unit of
  * work and results stream as they land.
  */
-async function runDiarBench(language: string, limit: number): Promise<Response> {
+async function runDiarBench(
+  language: string,
+  limit: number,
+  concurrency: number,
+  skipCorrection: boolean
+): Promise<Response> {
   const encoder = new TextEncoder();
   const started = Date.now();
 
@@ -213,7 +255,7 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
       const { rows } = await listDiarRows(language, limit);
       send({ type: "start", total: rows.length * ENGINE_KEYS.length });
 
-      for (const row of rows) {
+      await pool(rows, concurrency, async (row) => {
         const bytes = await fetchDiarAudio(row.audioUrl);
         if (!bytes) {
           for (const engine of ENGINE_KEYS) {
@@ -225,7 +267,7 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
               message: "audio fetch failed (the signed URL may have expired)",
             });
           }
-          continue;
+          return;
         }
         const audio = new Blob([bytes], { type: "audio/wav" });
 
@@ -235,6 +277,7 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
           language: row.languageCode,
           targetLanguage: row.languageCode,
           includeEmbedding: false,
+          skipCorrection,
         });
 
         ENGINE_KEYS.forEach((engine) => {
@@ -274,7 +317,7 @@ async function runDiarBench(language: string, limit: number): Promise<Response> 
             correctionError: payload.correctionError,
           });
         });
-      }
+      });
 
       send({ type: "done", elapsedMs: Date.now() - started });
       controller.close();
