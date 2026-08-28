@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { arenConfigured, customDir, listSamples } from "@/lib/samples";
+import { customDir, datasetSource, listSamples } from "@/lib/samples";
 
 export const runtime = "nodejs";
 
@@ -9,7 +9,7 @@ export async function GET() {
   return NextResponse.json({
     samples,
     count: samples.length,
-    arenConfigured: arenConfigured(),
+    source: datasetSource(),
     customDir: customDir() || null,
   });
 }

@@ -1,11 +1,11 @@
-import { readFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 
 import { ENGINE_KEYS, isEngineKey, type ConditionId, type EngineKey } from "@/lib/engines";
-import { resolveSamplePath, listSamples } from "@/lib/samples";
+import { listSamples, loadSampleAudio } from "@/lib/samples";
 import { runEngine, TnsaError, type OutputsResponse } from "@/lib/tnsa";
 
 export const runtime = "nodejs";
+// Vercel caps this by plan: 60 s on Hobby, up to 300 s on Pro.
 export const maxDuration = 300;
 
 export type EngineRun =
@@ -50,20 +50,15 @@ export async function POST(request: Request) {
 
   const sampleId = form.get("sample_id");
   if (typeof sampleId === "string" && sampleId) {
-    const resolved = await resolveSamplePath(sampleId, condition);
-    if (!resolved) {
-      return NextResponse.json({ error: `unknown sample '${sampleId}'` }, { status: 404 });
-    }
-    try {
-      const bytes = await readFile(resolved.file);
-      audio = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
-    } catch {
+    const loaded = await loadSampleAudio(sampleId, condition);
+    if (!loaded) {
       return NextResponse.json(
-        { error: `sample file missing on disk: ${resolved.file}` },
+        { error: `could not load sample '${sampleId}' (${condition})` },
         { status: 404 }
       );
     }
-    filename = resolved.name;
+    audio = new Blob([loaded.bytes], { type: loaded.contentType });
+    filename = loaded.name;
     const sample = (await listSamples()).find((item) => item.id === sampleId);
     reference = sample?.reference ?? null;
     referenceLanguage = sample?.language ?? null;

@@ -57,8 +57,11 @@ The API key is read only in server route handlers. `lib/tnsa.ts` imports
 |---|---|
 | `TNSA_API_BASE_URL` | Defaults to `https://embedding.tnsaai.com`. |
 | `TNSA_API_KEY` | Required. |
-| `AREN_DIR` | Path to the ARen dataset checkout. Enables the Arabic/English sample bank and live WER scoring. |
-| `CUSTOM_AUDIO_DIR` | Drop-in folder for your own clips. |
+| `HF_DATASET_REPO` | ARen dataset repo. Defaults to `TNSA/Aren`. |
+| `HF_DATASET_REVISION` | Branch or commit. Defaults to `main`. |
+| `HF_TOKEN` | Only if the dataset becomes private or gated. Public today. |
+| `AREN_DIR` | **Local dev only.** Read the dataset from disk instead of Hugging Face. Leave unset in production. |
+| `CUSTOM_AUDIO_DIR` | **Local dev only.** Drop-in folder for your own clips. |
 | `DEMO_USER` / `DEMO_PASSWORD` | Sign-in credentials. Required. |
 | `SESSION_SECRET` | HMAC key for the session cookie. Required. |
 | `COOKIE_SECURE` | Set `true` only when serving over HTTPS. |
@@ -87,14 +90,28 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 ## Audio
 
-**Arabic and English** come from ARen, the Arabic/English ASR robustness set —
-99 clips × 3 conditions (`clean`, `tel8k`, `tel8k_noisy`), with references and
-stored baseline hypotheses, so a run is scored the moment it lands.
+**Arabic and English** come from [ARen](https://huggingface.co/datasets/TNSA/Aren),
+the Arabic/English ASR robustness set — 99 clips × 3 conditions (`clean`, `tel8k`,
+`tel8k_noisy`), with references and stored baseline hypotheses, so a run is scored
+the moment it lands.
 
-**Indian languages** have no bundled clips: ARen does not cover Indic audio and
-there is none elsewhere in the project. Upload and record work for any language,
-and anything dropped into `CUSTOM_AUDIO_DIR` appears in the sample bank. Prefix a
-filename with a language code — `hi_loan_query.wav`, `ta-balance.wav` — to tag it.
+The dataset is read **over HTTP from Hugging Face**, not from disk, so the app
+deploys to a serverless host with no filesystem. Two details about that repo:
+
+- The JSONL manifests are at the repo root, but their `file_name` fields
+  (`data/clean/x.wav`) are relative to a nested `aren/` directory. The real object
+  path is `aren/data/<condition>/<id>.wav` — using `file_name` verbatim 404s.
+- Manifests are cached for an hour; audio is fetched per request and served to the
+  browser by **302 redirect to the HF CDN**, so clip bytes never stream through a
+  serverless function.
+
+Set `AREN_DIR` to read from a local checkout instead — useful offline, and much
+faster for long benchmark sweeps.
+
+**Indian languages** have no bundled clips: ARen does not cover Indic audio.
+Upload and record work for any language, and in local development anything dropped
+into `CUSTOM_AUDIO_DIR` appears in the sample bank — prefix a filename with a
+language code (`hi_loan_query.wav`, `ta-balance.wav`) to tag it.
 
 The Indic handling itself is wired and ready: script detection across Devanagari,
 Bengali, Gurmukhi, Gujarati, Odia, Tamil, Telugu, Kannada and Malayalam, a
@@ -103,6 +120,22 @@ and a **Force native script** control that drives `target_language` on the
 correction pass. That last one is the interesting demo for Indic speech, where the
 characteristic failure is not a mishearing but speech emitted phonetically into
 the wrong script — Telugu written in Gujarati letters, for instance.
+
+## Deploying to Vercel
+
+Copy `.env.vercel.example` to `.env.vercel`, fill it in, and add those variables
+to the Vercel project. `.env.vercel` is gitignored because it holds live secrets.
+
+Set `COOKIE_SECURE=true` in production — Vercel serves HTTPS and the session
+cookie should not travel without it. Leave `AREN_DIR` and `CUSTOM_AUDIO_DIR`
+unset; serverless has no persistent filesystem and setting them breaks the
+sample bank.
+
+**Function duration is the one real constraint.** `/api/compare` and
+`/api/benchmark` declare `maxDuration = 300`, but Vercel caps this by plan — 60 s
+on Hobby, up to 300 s on Pro. A single comparison takes a few seconds and is fine
+anywhere; a large benchmark sweep is not. Run big sweeps locally, or keep the clip
+count low.
 
 ## Scoring
 

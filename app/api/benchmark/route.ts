@@ -1,12 +1,12 @@
-import { readFile } from "node:fs/promises";
-
 import { ENGINE_KEYS, type ConditionId, type EngineKey } from "@/lib/engines";
-import { listSamples, resolveSamplePath } from "@/lib/samples";
+import { listSamples, loadSampleAudio } from "@/lib/samples";
 import { runEngine, TnsaError } from "@/lib/tnsa";
 import { score } from "@/lib/wer";
 
 export const runtime = "nodejs";
-export const maxDuration = 800;
+// Vercel caps this by plan: 60 s on Hobby, up to 300 s on Pro. A full 99-clip
+// pass exceeds both — run large sweeps locally, or lower the clip count.
+export const maxDuration = 300;
 
 export type BenchmarkEvent =
   | { type: "start"; total: number }
@@ -101,22 +101,15 @@ export async function POST(request: Request) {
 
         for (const condition of conditions) {
           if (!sample.conditions.includes(condition)) continue;
-          const resolved = await resolveSamplePath(sample.id, condition);
-          if (!resolved) continue;
-
-          let audio: Blob;
-          try {
-            const bytes = await readFile(resolved.file);
-            audio = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
-          } catch {
-            continue;
-          }
+          const loaded = await loadSampleAudio(sample.id, condition);
+          if (!loaded) continue;
+          const audio = new Blob([loaded.bytes], { type: loaded.contentType });
 
           // The embedding model is shared across STT engines, so only one run
           // per condition needs to carry it back.
           const settled = await Promise.allSettled(
             ENGINE_KEYS.map((engine, index) =>
-              runEngine(audio, resolved.name, {
+              runEngine(audio, loaded.name, {
                 engine,
                 language: sample.language ?? "auto",
                 includeEmbedding: withEmbeddings && index === 0,
