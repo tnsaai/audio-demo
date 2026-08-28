@@ -204,6 +204,30 @@ acoustic model has a Telugu head to begin with. On a single 200 s recording wher
 everything scores 94–98% the one-point gaps are not significant; the script
 difference is what to read.
 
+### The correction already happens server-side
+
+`/outputs` runs AGen internally when `correction` is in the include list, per
+segment, using its own language tagging. Measured on a code-mixed Telugu clip:
+
+| `include=` | segment @18.5 s | `agen_calls` |
+|---|---|---|
+| `transcript,languages` | `मिर्चे बजी…` Devanagari, `corrected=false` | 1 |
+| `transcript,languages,correction` | `మిర్చి బజ్జీ…` Telugu, `corrected=true` | 2 |
+
+An earlier version of this client ran its own AGen pass on top. That duplicated
+the server's work, added 8–150 s per request, and targeted the recording's
+majority language rather than each segment's — which for code-mixed Indian
+speech is usually English, the one language that needs no repair. It is gone;
+the server's pass is both cheaper and more accurate.
+
+### Recording language is the majority language
+
+`transcript.language` is a single value and reflects whichever language
+dominates. A Telugu conversation with English carrier phrases reports `en`.
+Read `transcript.languages` and the per-segment `primary` instead — a segment
+can carry `primary=te` while `stt_language=hi`, which is exactly the
+wrong-script case worth surfacing.
+
 ### Picking the correction target
 
 The corrector needs to be told which language to write. Two traps here, both hit

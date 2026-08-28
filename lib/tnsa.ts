@@ -1,7 +1,7 @@
 import "server-only";
 
 import { ENGINES, V2_LANGUAGES, type EngineKey } from "./engines";
-import { LANGUAGE_NAMES } from "./lang";
+import { LANGUAGE_NAMES, checkScript, INDIC_CODES } from "./lang";
 
 /**
  * Server-side client for the TNSA Audio API on the GH200 box.
@@ -274,19 +274,44 @@ export async function applyCorrection(
   const target = forced ?? transcript?.language ?? null;
   if (!transcript?.segments?.length || !target) return payload;
 
+  /*
+   * Target each segment at its own detected language, not the recording's.
+   *
+   * The recording-level language is the majority one — for code-mixed Indian
+   * speech that is usually English, which would aim the corrector at English
+   * for the very Telugu segments that need repairing. Per-segment tagging is
+   * already in the payload and is far more accurate: a segment can carry
+   * primary=te while its text was emitted in Devanagari, which is exactly the
+   * case worth fixing.
+   */
+  const candidates = transcript.segments
+    .map((segment) => {
+      const segmentTarget = forced ?? segment.primary ?? segment.stt_language ?? target;
+      return {
+        id: segment.id,
+        text: segment.text,
+        sourceLanguage: segment.stt_language ?? segment.primary ?? null,
+        target: segmentTarget,
+      };
+    })
+    .filter((segment) => {
+      if (!segment.text.trim() || !segment.target || segment.target === "auto") return false;
+      // Leave a segment alone when it is already in the right script. Sending
+      // everything wastes AGen time and risks degrading correct text — on
+      // Arabic the pass measurably made good output worse.
+      const check = checkScript(segment.text, segment.target);
+      if (check.mismatch) return true;
+      // An Indic segment with no native characters at all was romanised or
+      // emitted in a foreign script; both need repair.
+      return INDIC_CODES.has(segment.target) && !check.scripts.some((sc) => sc !== "Latin");
+    });
+
+  if (!candidates.length) return payload;
+
   const correctionStarted = Date.now();
   let corrected: Map<number, string>;
   try {
-    corrected = await correctSegments(
-      transcript.segments.map((segment) => ({
-        id: segment.id,
-        text: segment.text,
-        sourceLanguage: segment.primary ?? segment.stt_language ?? null,
-      })),
-      target,
-      LANGUAGE_NAMES[target] ?? target,
-      opts.signal
-    );
+    corrected = await correctSegments(candidates, opts.signal);
   } catch (cause) {
     // A correction failure must not lose a good acoustic transcript. Return the
     // uncorrected result rather than failing the whole run.
@@ -329,9 +354,13 @@ export async function applyCorrection(
  * whole reason it is a separate engine rather than always-on.
  */
 export async function correctSegments(
-  segments: Array<{ id: number; text: string; sourceLanguage?: string | null }>,
-  targetLanguage: string,
-  targetLanguageName: string,
+  segments: Array<{
+    id: number;
+    text: string;
+    sourceLanguage?: string | null;
+    /** Language this segment should be written in. Set per segment. */
+    target: string;
+  }>,
   signal?: AbortSignal
 ): Promise<Map<number, string>> {
   const usable = segments.filter((segment) => segment.text.trim());
@@ -343,8 +372,8 @@ export async function correctSegments(
     segments: usable.map((segment, index) => ({
       id: segment.id,
       source_language_code: segment.sourceLanguage || "unknown",
-      target_language_code: targetLanguage,
-      target_language: targetLanguageName,
+      target_language_code: segment.target,
+      target_language: LANGUAGE_NAMES[segment.target] ?? segment.target,
       script_mismatch: true,
       transcript: segment.text,
       previous_context: usable[index - 1]?.text.slice(-500) ?? "",

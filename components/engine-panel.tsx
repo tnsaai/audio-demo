@@ -3,7 +3,7 @@
 import { AlertTriangle, Check } from "lucide-react";
 
 import { ENGINES, type EngineKey } from "@/lib/engines";
-import { checkScript, isRtl, languageName } from "@/lib/lang";
+import { INDIC_CODES, checkScript, isRtl, languageName } from "@/lib/lang";
 import { formatPercent, score, type Score } from "@/lib/wer";
 import { cn, ms } from "@/lib/cn";
 import { Badge, Card, CardBody, CardHead, Label, Stat } from "./ui";
@@ -47,6 +47,7 @@ export type EngineResult = {
       text: string;
       raw_text?: string;
       primary?: string;
+      stt_language?: string;
       languages?: string[];
       language_confidence?: number;
       language_source?: string;
@@ -153,7 +154,17 @@ function Body({
 }) {
   const transcript = result.transcript;
   const text = transcript?.text ?? "";
-  const language = transcript?.language ?? referenceLanguage;
+
+  /*
+   * The recording-level language is the majority one, which for code-mixed
+   * Indian speech is usually English — labelling a Telugu conversation
+   * "English" because four of six segments carried English. Prefer a detected
+   * Indic language for the headline tag, and list the rest alongside it.
+   */
+  const detected = transcript?.languages ?? [];
+  const indic = detected.find((code) => INDIC_CODES.has(code));
+  const language = indic ?? transcript?.language ?? referenceLanguage;
+  const others = detected.filter((code) => code !== language);
   const scored = reference ? score(reference, text, referenceLanguage ?? undefined) : null;
   const script = checkScript(text, language);
   const rtl = isRtl(language);
@@ -175,7 +186,12 @@ function Body({
       <div>
         <div className="flex items-center gap-2">
           <Label>Transcript</Label>
-          {transcript?.language ? <Badge>{languageName(transcript.language)}</Badge> : null}
+          {language ? <Badge>{languageName(language)}</Badge> : null}
+          {others.length ? (
+            <Badge title="Every language detected across the segments">
+              + {others.map((code) => languageName(code)).join(", ")}
+            </Badge>
+          ) : null}
           {script.scripts.length ? (
             <Badge title="Unicode scripts present in the output">
               {script.scripts.join(" + ")} script
@@ -369,6 +385,11 @@ function Segments({
                 {segment.start.toFixed(2)}–{segment.end.toFixed(2)}s
               </span>
               {segment.primary ? <Badge>{languageName(segment.primary)}</Badge> : null}
+              {segment.stt_language && segment.stt_language !== segment.primary ? (
+                <Badge tone="warn" title="Emitted in this language's script but tagged as the one on the left">
+                  emitted as {languageName(segment.stt_language)}
+                </Badge>
+              ) : null}
               {segment.language_confidence != null ? (
                 <span>conf {segment.language_confidence.toFixed(2)}</span>
               ) : null}

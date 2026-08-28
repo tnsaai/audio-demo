@@ -20,14 +20,21 @@ export const ENGINES = {
     key: "v1indic" as const,
     name: "NGenSTT-V1 Indic",
     short: "V1 Indic",
-    base: "tnsa-ngen-stt-v1 + AGen (Qwen) script repair",
-    /**
-     * Runs the AGen correction pass over the STT output. That pass is what
-     * rewrites Indic speech emitted phonetically into the wrong script —
-     * Telugu written in Devanagari, for instance — into its native script.
+    base: "tnsa-ngen-stt-v1, with server-side AGen script repair",
+    /*
+     * No client-side correction pass.
+     *
+     * `/outputs` already runs AGen internally when `correction` is in the
+     * include list, and does it per segment using its own language tagging.
+     * Measured on a code-mixed Telugu clip: without the include, segment 18.5s
+     * stays `मिर्चे बजी…` in Devanagari; with it, the same segment comes back
+     * `మిర్చి బజ్జీ…` in Telugu and `agen_calls` goes 1 -> 2.
+     *
+     * Running our own pass on top duplicated that work, added 8-150s, and
+     * targeted the recording's majority language instead of each segment's.
      */
-    correction: true,
-    blurb: "Acoustic pass plus a Qwen correction stage that repairs Indic script.",
+    correction: false,
+    blurb: "Has Indic heads V2 lacks; the server repairs wrong-script segments in the same call.",
   },
 } as const;
 
