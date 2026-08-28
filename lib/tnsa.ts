@@ -74,6 +74,9 @@ export type OutputsResponse = {
   };
   /** Set when the Indic correction pass failed but the acoustic result stands. */
   correctionError?: string;
+  /** Language the correction targeted, when inferred rather than detected. */
+  correctionTarget?: string;
+  correctionTargetSource?: "cross-engine";
 };
 
 export type TranscriptSegment = {
@@ -207,8 +210,17 @@ export async function applyCorrection(
 ): Promise<OutputsResponse> {
   const started = Date.now();
   const transcript = payload.transcript;
-  const target = opts.targetLanguage || opts.language || transcript?.language;
-  if (!transcript?.segments?.length || !target || target === "auto") return payload;
+  // "auto" is a request to detect, not a language. Treating it as one made the
+  // correction bail out silently whenever the picker was left on Auto detect —
+  // which is the default, so the Indic engines did nothing at all.
+  const forced =
+    opts.targetLanguage && opts.targetLanguage !== "auto"
+      ? opts.targetLanguage
+      : opts.language && opts.language !== "auto"
+        ? opts.language
+        : null;
+  const target = forced ?? transcript?.language ?? null;
+  if (!transcript?.segments?.length || !target) return payload;
 
   const correctionStarted = Date.now();
   let corrected: Map<number, string>;
@@ -346,32 +358,78 @@ export async function runEngines(
 
   const out = new Map<EngineKey, { ok: true; result: OutputsResponse } | { ok: false; error: unknown }>();
 
+  // Phase 1: every distinct acoustic model, once, in parallel.
+  const acoustic = new Map<string, OutputsResponse>();
   await Promise.all(
-    [...byModel.entries()].map(async ([, group]) => {
-      // Any engine in the group identifies the model; run the acoustic pass raw.
-      let base: OutputsResponse;
+    [...byModel.entries()].map(async ([modelId, group]) => {
       try {
-        base = await runEngine(audio, filename, { ...opts, engine: group[0], skipCorrection: true });
+        acoustic.set(
+          modelId,
+          await runEngine(audio, filename, { ...opts, engine: group[0], skipCorrection: true })
+        );
       } catch (error) {
         for (const engine of group) out.set(engine, { ok: false, error });
-        return;
-      }
-
-      // Correction variants are sequential: they hit the same AGen worker, and
-      // firing them together only queues behind each other anyway.
-      for (const engine of group) {
-        if (!ENGINES[engine].correction) {
-          out.set(engine, { ok: true, result: base });
-          continue;
-        }
-        try {
-          out.set(engine, { ok: true, result: await applyCorrection(base, opts) });
-        } catch (error) {
-          out.set(engine, { ok: false, error });
-        }
       }
     })
   );
+
+  /*
+   * Phase 2: pick the correction target.
+   *
+   * `ngenstt-v2-large` only has heads for a handful of languages, so it reports
+   * Telugu speech as Hindi and writes it phonetically in Devanagari. Asking the
+   * corrector to turn that Devanagari into Hindi is a no-op — the text already
+   * looks like Hindi. The other acoustic model does have those heads, so when
+   * it reports a language the narrow model cannot even represent, that reading
+   * is the more informative one and becomes the target for every correction.
+   *
+   * An explicitly forced language always wins over this inference.
+   */
+  const forced =
+    opts.targetLanguage && opts.targetLanguage !== "auto"
+      ? opts.targetLanguage
+      : opts.language && opts.language !== "auto"
+        ? opts.language
+        : null;
+
+  let inferred: string | null = null;
+  if (!forced) {
+    for (const [modelId, payload] of acoustic) {
+      const detected = payload.transcript?.language;
+      if (!detected) continue;
+      if (modelId !== "ngenstt-v2-large" && !V2_LANGUAGES.has(detected)) {
+        inferred = detected;
+        break;
+      }
+    }
+  }
+
+  // Phase 3: correction variants, sequential — they share one AGen worker, so
+  // firing them together only queues them behind each other.
+  for (const [modelId, group] of byModel) {
+    const base = acoustic.get(modelId);
+    if (!base) continue;
+    for (const engine of group) {
+      if (!ENGINES[engine].correction) {
+        out.set(engine, { ok: true, result: base });
+        continue;
+      }
+      try {
+        const corrected = await applyCorrection(base, {
+          ...opts,
+          targetLanguage: forced ?? inferred ?? undefined,
+        });
+        out.set(engine, {
+          ok: true,
+          result: inferred
+            ? { ...corrected, correctionTargetSource: "cross-engine" as const, correctionTarget: inferred }
+            : corrected,
+        });
+      } catch (error) {
+        out.set(engine, { ok: false, error });
+      }
+    }
+  }
 
   return out;
 }

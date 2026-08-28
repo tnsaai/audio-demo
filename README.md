@@ -200,6 +200,36 @@ acoustic model has a Telugu head to begin with. On a single 200 s recording wher
 everything scores 94–98% the one-point gaps are not significant; the script
 difference is what to read.
 
+### Picking the correction target
+
+The corrector needs to be told which language to write. Two traps here, both hit
+in practice:
+
+- **`auto` is not a language.** Treating the picker's `"auto"` as a target made
+  the correction bail out silently whenever the language was left on Auto detect
+  — the default — so both Indic engines did nothing at all while appearing to run.
+- **A narrow model's own detection is useless as a target.** `ngenstt-v2-large`
+  reports Telugu speech as Hindi (or English) and writes it phonetically in
+  Devanagari. Asking the corrector to turn that into Hindi is a no-op, because
+  the text already looks like Hindi.
+
+So when no language is forced, the target is taken from **the other acoustic
+model**: if a model with broader coverage reports a language the narrow one
+cannot even represent, that reading wins and drives correction for every engine.
+The panel shows a `repaired as <language>` badge when this happens, so the
+inference is visible rather than magic.
+
+Measured on a 200 s Telugu recording with the language left on Auto:
+
+| | Before | After |
+|---|---|---|
+| V2 | `अलीपुरी इनका ऑप्शन रह लेती हूँ… मिर्ची बाजी` | unchanged (no correction stage) |
+| V2 Indic | identical to V2, 0 segments changed | `అలీ పూరి ఇంకా ఆప్షన్ తీసుకుంటున్నాను… మిర్చి బజ్జి`, 8 changed |
+
+The cost is real: correction took 104 s on that recording for V2 Indic and 152 s
+for V1 Indic, with the full three-engine comparison at 6m25s. Long multi-speaker
+audio through a correction engine is a local-only operation.
+
 ### Shared acoustic passes
 
 Engines that wrap the same acoustic model — V2 and V2 + AGen both run

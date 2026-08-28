@@ -29,6 +29,9 @@ export type EngineResult = {
     stt_hedges_won: number;
   };
   models?: { stt?: string };
+  correctionError?: string;
+  correctionTarget?: string;
+  correctionTargetSource?: "cross-engine";
   embedding?: { vector: number[]; dim: number };
   transcript?: {
     text: string;
@@ -186,6 +189,19 @@ function Body({
           ) : null}
           {transcript?.mixed_language ? (
             <Badge tone="warn">{transcript.language_switch_count} switches</Badge>
+          ) : null}
+          {result.correctionTargetSource === "cross-engine" && result.correctionTarget ? (
+            <Badge
+              tone="v3"
+              title={`This model has no head for ${languageName(result.correctionTarget)} and reported a different language. The other acoustic model does, so its reading was used as the correction target.`}
+            >
+              repaired as {languageName(result.correctionTarget)}
+            </Badge>
+          ) : null}
+          {result.correctionError ? (
+            <Badge tone="bad" title={result.correctionError}>
+              correction failed
+            </Badge>
           ) : null}
           {disagreement ? (
             <Badge
