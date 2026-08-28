@@ -199,7 +199,7 @@ function Body({
           ) : null}
           {result.correctionError ? (
             <Badge tone="bad" title={result.correctionError}>
-              correction failed
+              correction failed: {result.correctionError.slice(0, 60)}
             </Badge>
           ) : null}
           {disagreement ? (

@@ -105,7 +105,11 @@ export async function POST(request: Request) {
     skipCorrection?: boolean;
   };
 
-  const concurrency = Math.max(1, Math.min(body.concurrency ?? 4, 8));
+  // Each clip issues one request per acoustic model, so N here means 2N in
+  // flight. Measured: 8 concurrent /outputs reliably took the shared box down
+  // (health 200 immediately before, 502 immediately after, reproduced twice).
+  // 2 clips -> 4 concurrent is the largest setting that stayed stable.
+  const concurrency = Math.max(1, Math.min(body.concurrency ?? 2, 4));
   const skipCorrection = body.skipCorrection === true;
 
   const conditions: ConditionId[] = body.conditions?.length

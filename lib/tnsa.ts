@@ -353,22 +353,42 @@ export async function correctSegments(
     options: { temperature: 0, reasoning: false },
   };
 
-  const response = await fetch(`${BASE}/agen`, {
-    method: "POST",
-    headers: { ...headers(), "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new TnsaError(
-      "agen_error",
-      describeFailure(response.status, await response.text()),
-      RETRYABLE.has(response.status)
-    );
+  // The same retry the STT call gets. Without it a single transient 502 on a
+  // shared box fails the whole correction and the panel shows "correction
+  // failed" for what is really a one-second blip.
+  let raw = "";
+  let status = 0;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(`${BASE}/agen`, {
+        method: "POST",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+        cache: "no-store",
+      });
+    } catch (cause) {
+      if ((cause as Error).name === "AbortError") throw cause;
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+      throw new TnsaError("transport_error", `AGen unreachable: ${(cause as Error).message}`, true);
+    }
+
+    status = response.status;
+    raw = await response.text();
+    if (response.ok) break;
+
+    if (RETRYABLE.has(status) && attempt < MAX_ATTEMPTS) {
+      await sleep(1000 * 2 ** (attempt - 1));
+      continue;
+    }
+    throw new TnsaError("agen_error", describeFailure(status, raw), RETRYABLE.has(status));
   }
 
-  const parsed = (await response.json()) as {
+  const parsed = JSON.parse(raw) as {
     error?: { code: string; message: string };
     segments?: Array<{ id: number; corrected_text?: string; changed?: boolean }>;
   };
