@@ -8,8 +8,8 @@ nothing is mocked or pre-recorded.
 
 | | Model id | Notes |
 |---|---|---|
-| **V2** | `ngenstt-v2-large` | QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi. |
-| **V1 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus the Qwen (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
+| **V2** | `ngenstt-v2-large` | NGenASR-V2. Strongest on Arabic and English; no Indic head beyond Hindi. |
+| **V1 Indic** | `tnsa-ngen-stt-v1` + AGen | Acoustic pass plus the  (`agen-multilingual-v1`) stage that rewrites Indic speech into its native script. |
 
 A third engine, V2 Indic (`ngenstt-v2-large` + AGen), was measured and dropped.
 Correction cannot retrofit a language head the acoustic model lacks: it converted
