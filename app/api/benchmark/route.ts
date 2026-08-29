@@ -103,6 +103,8 @@ export async function POST(request: Request) {
     concurrency?: number;
     /** Skip the AGen pass - much faster, and isolates the acoustic models. */
     skipCorrection?: boolean;
+    /** Restrict the run to a subset of engines. */
+    engines?: EngineKey[];
   };
 
   // Each clip issues one request per acoustic model, so N here means 2N in
@@ -110,6 +112,9 @@ export async function POST(request: Request) {
   // (health 200 immediately before, 502 immediately after, reproduced twice).
   // 2 clips -> 4 concurrent is the largest setting that stayed stable.
   const concurrency = Math.max(1, Math.min(body.concurrency ?? 2, 4));
+  const engines: EngineKey[] = body.engines?.length
+    ? body.engines.filter((key) => ENGINE_KEYS.includes(key))
+    : ENGINE_KEYS;
   const skipCorrection = body.skipCorrection === true;
 
   const conditions: ConditionId[] = body.conditions?.length
@@ -125,7 +130,8 @@ export async function POST(request: Request) {
       Math.max(1, Math.min(body.limit ?? 2, 100)),
       // DiarBench clips are ~200 s; keep fewer in flight than for ARen.
       Math.max(1, Math.min(concurrency, 3)),
-      skipCorrection
+      skipCorrection,
+      engines
     );
   }
 
@@ -143,7 +149,7 @@ export async function POST(request: Request) {
       const send = (event: BenchmarkEvent) =>
         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
 
-      send({ type: "start", total: chosen.length * conditions.length * ENGINE_KEYS.length });
+      send({ type: "start", total: chosen.length * conditions.length * engines.length });
 
       // One task per sample, conditions sequential inside it: the clean vector
       // must be in hand before its degraded variants arrive for the
@@ -159,7 +165,7 @@ export async function POST(request: Request) {
 
           // The embedding model is shared across STT engines, so only one run
           // per condition needs to carry it back.
-          const results = await runEngines(audio, loaded.name, ENGINE_KEYS, {
+          const results = await runEngines(audio, loaded.name, engines, {
             language: sample.language ?? "auto",
             includeEmbedding: withEmbeddings,
             skipCorrection,
@@ -245,7 +251,8 @@ async function runDiarBench(
   language: string,
   limit: number,
   concurrency: number,
-  skipCorrection: boolean
+  skipCorrection: boolean,
+  engines: EngineKey[]
 ): Promise<Response> {
   const encoder = new TextEncoder();
   const started = Date.now();
@@ -257,12 +264,12 @@ async function runDiarBench(
 `));
 
       const { rows } = await listDiarRows(language, limit);
-      send({ type: "start", total: rows.length * ENGINE_KEYS.length });
+      send({ type: "start", total: rows.length * engines.length });
 
       await pool(rows, concurrency, async (row) => {
         const bytes = await fetchDiarAudio(row.audioUrl);
         if (!bytes) {
-          for (const engine of ENGINE_KEYS) {
+          for (const engine of engines) {
             send({
               type: "error",
               sample: row.recordingId,
@@ -277,14 +284,14 @@ async function runDiarBench(
 
         // V2 cannot be forced to most Indic codes; runEngine downgrades it to
         // auto. The correction engines still target the real language.
-        const results = await runEngines(audio, `${row.recordingId}.wav`, ENGINE_KEYS, {
+        const results = await runEngines(audio, `${row.recordingId}.wav`, engines, {
           language: row.languageCode,
           targetLanguage: row.languageCode,
           includeEmbedding: false,
           skipCorrection,
         });
 
-        ENGINE_KEYS.forEach((engine) => {
+        engines.forEach((engine) => {
           const outcome = results.get(engine);
           if (!outcome || !outcome.ok) {
             const reason = outcome?.ok === false ? outcome.error : "no result";
