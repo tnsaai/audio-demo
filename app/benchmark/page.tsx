@@ -491,7 +491,7 @@ export default function Benchmark() {
                   <tr key={index} className="border-b border-[var(--color-line)] last:border-0">
                     <td className="py-1.5 pr-3 font-mono text-[var(--color-muted)]">{row.sample}</td>
                     <td className="py-1.5 pr-3">
-                      <Badge tone={row.engine === "v2" ? "v2" : "v1"}>{ENGINES[row.engine].short}</Badge>
+                      <Badge tone={row.engine === "v2" ? "v2" : row.engine === "v2indic" ? "v3" : "v1"}>{ENGINES[row.engine].short}</Badge>
                     </td>
                     <td className="py-1.5 pr-3 text-[var(--color-muted)]">
                       {CONDITIONS.find((c) => c.id === row.condition)?.label}

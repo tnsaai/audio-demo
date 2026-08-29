@@ -210,7 +210,7 @@ export default function Compare() {
         </Card>
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-3">
         {ENGINE_KEYS.map((key) => (
           <EnginePanel
             key={key}

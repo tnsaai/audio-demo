@@ -11,9 +11,21 @@ export const ENGINES = {
     name: "NGenSTT-V2-Large",
     short: "V2",
     base: "QwenASR-1.7B",
-    /** No post-pass; the acoustic model's output is taken as final. */
+    /** Raw acoustic output — the `correction` include is withheld. */
     correction: false,
+    serverCorrection: false,
     blurb: "QwenASR-1.7B. Strongest on Arabic and English; no Indic head beyond Hindi.",
+  },
+  v2indic: {
+    id: "ngenstt-v2-large",
+    key: "v2indic" as const,
+    name: "NGenSTT-V2 Indic",
+    short: "V2 Indic",
+    base: "QwenASR-1.7B, with server-side AGen script repair",
+    correction: false,
+    /** Adds `correction` to the include list so /outputs runs AGen per segment. */
+    serverCorrection: true,
+    blurb: "V2's acoustic pass with the server's script-repair stage enabled.",
   },
   v1indic: {
     id: "tnsa-ngen-stt-v1",
@@ -34,6 +46,7 @@ export const ENGINES = {
      * targeted the recording's majority language instead of each segment's.
      */
     correction: false,
+    serverCorrection: true,
     blurb: "Has Indic heads V2 lacks; the server repairs wrong-script segments in the same call.",
   },
 } as const;
@@ -50,10 +63,10 @@ export const ENGINES = {
 export const V2_LANGUAGES = new Set(["auto", "ar", "en", "hi", "fa"]);
 
 export type EngineKey = keyof typeof ENGINES;
-export const ENGINE_KEYS: EngineKey[] = ["v2", "v1indic"];
+export const ENGINE_KEYS: EngineKey[] = ["v2", "v2indic", "v1indic"];
 
 export function isEngineKey(value: string): value is EngineKey {
-  return value === "v2" || value === "v1indic";
+  return value === "v2" || value === "v2indic" || value === "v1indic";
 }
 
 /**

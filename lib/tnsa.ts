@@ -157,7 +157,10 @@ export async function runEngine(
   filename: string,
   opts: RunOptions
 ): Promise<OutputsResponse> {
-  const include = ["transcript", "languages", "correction"];
+  // `correction` makes /outputs run AGen per segment server-side. Withholding
+  // it is what separates the raw acoustic engines from the Indic ones.
+  const include = ["transcript", "languages"];
+  if (ENGINES[opts.engine].serverCorrection) include.push("correction");
   if (opts.includeEmbedding !== false) include.unshift("embedding");
 
   const form = new FormData();
@@ -455,10 +458,17 @@ export async function runEngines(
   engines: EngineKey[],
   opts: Omit<RunOptions, "engine">
 ): Promise<Map<EngineKey, { ok: true; result: OutputsResponse } | { ok: false; error: unknown }>> {
-  const byModel = new Map<string, EngineKey[]>();
+  /*
+   * Group by model *and* whether the server correction include is set. Two
+   * engines can share an acoustic model yet need different requests: V2 and
+   * V2 Indic both run ngenstt-v2-large but differ on the `correction` include,
+   * so collapsing them by model id alone would serve one engine's result for
+   * both and silently report identical output.
+   */
+  const byRequest = new Map<string, EngineKey[]>();
   for (const engine of engines) {
-    const id = ENGINES[engine].id;
-    byModel.set(id, [...(byModel.get(id) ?? []), engine]);
+    const key = `${ENGINES[engine].id}|${ENGINES[engine].serverCorrection ? "corr" : "raw"}`;
+    byRequest.set(key, [...(byRequest.get(key) ?? []), engine]);
   }
 
   const out = new Map<EngineKey, { ok: true; result: OutputsResponse } | { ok: false; error: unknown }>();
@@ -466,10 +476,10 @@ export async function runEngines(
   // Phase 1: every distinct acoustic model, once, in parallel.
   const acoustic = new Map<string, OutputsResponse>();
   await Promise.all(
-    [...byModel.entries()].map(async ([modelId, group]) => {
+    [...byRequest.entries()].map(async ([requestKey, group]) => {
       try {
         acoustic.set(
-          modelId,
+          requestKey,
           await runEngine(audio, filename, { ...opts, engine: group[0], skipCorrection: true })
         );
       } catch (error) {
@@ -499,10 +509,10 @@ export async function runEngines(
 
   let inferred: string | null = null;
   if (!forced) {
-    for (const [modelId, payload] of acoustic) {
+    for (const [requestKey, payload] of acoustic) {
       const detected = payload.transcript?.language;
       if (!detected) continue;
-      if (modelId !== "ngenstt-v2-large" && !V2_LANGUAGES.has(detected)) {
+      if (!requestKey.startsWith("ngenstt-v2-large") && !V2_LANGUAGES.has(detected)) {
         inferred = detected;
         break;
       }
@@ -511,8 +521,8 @@ export async function runEngines(
 
   // Phase 3: correction variants, sequential — they share one AGen worker, so
   // firing them together only queues them behind each other.
-  for (const [modelId, group] of byModel) {
-    const base = acoustic.get(modelId);
+  for (const [requestKey, group] of byRequest) {
+    const base = acoustic.get(requestKey);
     if (!base) continue;
     for (const engine of group) {
       if (!ENGINES[engine].correction || opts.skipCorrection) {
