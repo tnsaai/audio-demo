@@ -64,6 +64,37 @@ type RowsResponse = {
   }>;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The rows API computes an index the first time a config is touched, so a cold
+ * language can take tens of seconds or return 500 while it builds. Retrying
+ * turns "this language is broken" into "this language is slow the first time".
+ */
+async function fetchRows(url: string, signal?: AbortSignal): Promise<RowsResponse | null> {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers: hfHeaders(),
+        signal,
+        // Cache the warm result; a cold config is expensive to recompute.
+        next: { revalidate: 900 },
+      });
+      if (response.ok) {
+        const payload = (await response.json()) as RowsResponse;
+        // A config still being indexed answers with an error body, not a 5xx.
+        if (!payload.error) return payload;
+      } else if (response.status < 500 && response.status !== 429) {
+        return null;
+      }
+    } catch (cause) {
+      if ((cause as Error).name === "AbortError") throw cause;
+    }
+    if (attempt < 4) await sleep(2000 * attempt);
+  }
+  return null;
+}
+
 function hfHeaders(): HeadersInit {
   const token = process.env.HF_TOKEN?.trim();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -101,15 +132,8 @@ export async function listDiarRows(
       `${ROWS_API}?dataset=${encodeURIComponent(DATASET)}` +
       `&config=${encodeURIComponent(language)}&split=test&offset=${offset}&length=${length}`;
 
-    let payload: RowsResponse;
-    try {
-      const response = await fetch(url, { headers: hfHeaders(), signal, cache: "no-store" });
-      if (!response.ok) break;
-      payload = (await response.json()) as RowsResponse;
-    } catch {
-      break;
-    }
-    if (payload.error || !payload.rows?.length) break;
+    const payload = await fetchRows(url, signal);
+    if (!payload?.rows?.length) break;
     total = payload.num_rows_total ?? total;
 
     for (const entry of payload.rows) {
