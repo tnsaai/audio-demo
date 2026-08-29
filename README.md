@@ -220,6 +220,20 @@ majority language rather than each segment's — which for code-mixed Indian
 speech is usually English, the one language that needs no repair. It is gone;
 the server's pass is both cheaper and more accurate.
 
+### Giving the corrector a sharper brief
+
+`/outputs` owns the correction prompt, so the only lever is the fields sent to
+AGen. The one that matters is `source_language_code`: it carries **the language
+implied by the script actually observed**, not the language the recogniser
+claimed. For Telugu emitted in Devanagari that means `source=hi, target=te` —
+"this reads as Hindi but should be Telugu" — which is far more actionable than
+`source=te, target=te`, since the claimed language is precisely what was wrong.
+Romanised text is passed as `latin`.
+
+The client pass is a second-pass repair, not a replacement: it runs only on
+segments the server's own correction left in the wrong script, so on a clean
+result there are no candidates and it costs nothing.
+
 ### Recording language is the majority language
 
 `transcript.language` is a single value and reflects whichever language

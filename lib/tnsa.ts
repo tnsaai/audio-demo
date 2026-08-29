@@ -1,7 +1,7 @@
 import "server-only";
 
 import { ENGINES, V2_LANGUAGES, type EngineKey } from "./engines";
-import { LANGUAGE_NAMES, checkScript, INDIC_CODES } from "./lang";
+import { LANGUAGE_NAMES, checkScript, observedScriptLanguage, INDIC_CODES } from "./lang";
 
 /**
  * Server-side client for the TNSA Audio API on the GH200 box.
@@ -293,7 +293,12 @@ export async function applyCorrection(
       return {
         id: segment.id,
         text: segment.text,
-        sourceLanguage: segment.stt_language ?? segment.primary ?? null,
+        // The script the text is actually in, not the language claimed for it.
+        sourceLanguage:
+          observedScriptLanguage(segment.text) ??
+          segment.stt_language ??
+          segment.primary ??
+          null,
         target: segmentTarget,
       };
     })

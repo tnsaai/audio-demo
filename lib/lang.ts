@@ -108,6 +108,28 @@ export function checkScript(text: string, language?: string | null): ScriptCheck
   };
 }
 
+/** Script name -> the language code that script most directly implies. */
+const SCRIPT_LANGUAGE: Record<string, string> = {
+  Devanagari: "hi", Bengali: "bn", Gurmukhi: "pa", Gujarati: "gu",
+  Odia: "or", Tamil: "ta", Telugu: "te", Kannada: "kn", Malayalam: "ml",
+  Sinhala: "si", Arabic: "ar", Hebrew: "he",
+};
+
+/**
+ * What language does this text *look* like, judged purely on script?
+ *
+ * This is the strongest hint the corrector can be given. Telling it the text
+ * reads as Hindi but should be Telugu is far more actionable than passing the
+ * language the recogniser claimed — which, in the failure case being repaired,
+ * is exactly the thing that was wrong. Returns "latin" for romanised text.
+ */
+export function observedScriptLanguage(text: string): string | null {
+  const scripts = detectScripts(text);
+  const nonLatin = scripts.find((name) => name !== "Latin");
+  if (nonLatin) return SCRIPT_LANGUAGE[nonLatin] ?? null;
+  return scripts.includes("Latin") ? "latin" : null;
+}
+
 export const languageName = (code?: string | null) =>
   (code && (LANGUAGE_NAMES[code] ?? code.toUpperCase())) || "Unknown";
 
